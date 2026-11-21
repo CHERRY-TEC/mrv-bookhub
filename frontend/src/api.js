@@ -3,7 +3,7 @@
  * Base URL comes from VITE_API_BASE_URL (.env).
  */
 
-const BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/$/, '');
+const BASE = (import.meta.env.VITE_API_BASE_URL || 'https://mrv-bookhub-api.vercel.app/api').replace(/\/$/, '');
 
 function getToken() {
   try {
