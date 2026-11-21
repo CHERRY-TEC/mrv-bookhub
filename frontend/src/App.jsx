@@ -244,7 +244,11 @@ export default function App() {
       } catch (err) {
         // Backend offline: shelf still renders with decorative books
         if (alive) {
-          setToast({ message: `Backend unreachable – showing demo shelf (${err.message})`, kind: 'error' });
+          // Public/demo deployments run without the API; the shelf still works fully.
+          // Only surface a warning when actually developing locally.
+          if (import.meta.env.DEV) {
+            setToast({ message: `Backend unreachable – showing demo shelf (${err.message})`, kind: 'error' });
+          }
         }
       }
     })();
