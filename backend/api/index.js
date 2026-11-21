@@ -7,6 +7,7 @@ process.env.NODE_ENV = 'production';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'mrv-bookhub-public-demo-jwt-secret-2026-change-me';
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || 'https://mrv-deploy.vercel.app';
 process.env.DATABASE_PATH = '/tmp/mrv_bookhub.db';
+process.env.UPLOAD_DIR = '/tmp/uploads/book-images';
 process.env.DEV_SIMULATE_OTP = 'true';
 process.env.REMINDER_ENABLED = 'false';
 
