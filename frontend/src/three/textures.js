@@ -328,6 +328,137 @@ function paperBase(ctx, W, H, gutterSide) {
   ctx.fillRect(0, 0, W, H);
 }
 
+/**
+ * One of the 6 printed pages of an open book (pages 0..5 = 3 spreads).
+ * Page 0/1 = current front/back matter, 2..5 = extended catalogue content.
+ * The two sides of a physical leaf share a book/page index via `bookPage`.
+ */
+export function makePageTexture(book, index) {
+  switch (index) {
+    case 0: return makeLeftPageTexture(book);
+    case 1: return makeRightPageTexture(book);
+    default: return makeExtraPageTexture(book, index);
+  }
+}
+
+/** Extended content pages (2..5) — course info, how-to, policies, colophon. */
+export function makeExtraPageTexture(book, index) {
+  const W = 512;
+  const H = 704;
+  const c = makeCanvas(W, H);
+  const ctx = c.getContext('2d');
+  // Left-hand faces have the gutter on the right; right-hand on the left
+  paperBase(ctx, W, H, index % 2 === 0 ? 'right' : 'left');
+
+  const listing = book.listing || null;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+
+  const heading = (text, y) => {
+    ctx.font = `bold 17px ${SERIF}`;
+    ctx.fillStyle = PAPER_GOLD;
+    drawTrackedLeft(ctx, text, 54, y, 2.5);
+  };
+  const rule = (y) => {
+    ctx.strokeStyle = 'rgba(168,116,31,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(54, y); ctx.lineTo(W - 54, y); ctx.stroke();
+  };
+
+  if (index === 2) {
+    // Catalogue card: ISBN, edition, department, course
+    heading('CATALOGUE DETAILS', 96);
+    rule(116);
+    ctx.font = `21px ${SERIF}`;
+    ctx.fillStyle = INK;
+    let y = 162;
+    const rows = [
+      ['Title', book.title],
+      ['Author', book.author],
+      ['Edition', listing?.edition || '—'],
+      ['ISBN', listing?.isbn || '—'],
+      ['Course', listing?.course_code || '—'],
+      ['Department', listing?.department_name || 'MRV College'],
+    ];
+    for (const [k, v] of rows) {
+      ctx.fillStyle = PAPER_GOLD;
+      ctx.font = `bold 19px ${SERIF}`;
+      ctx.fillText(`${k}`, 54, y);
+      ctx.fillStyle = INK;
+      ctx.font = `21px ${SERIF}`;
+      y = wrapText(ctx, String(v || '—'), 190, y, W - 244, 28, 2) + 34;
+    }
+  } else if (index === 3) {
+    // How borrowing works / steps
+    heading(listing?.listing_type === 'sell' ? 'PLACING AN ORDER' : 'BORROWING STEPS', 96);
+    rule(116);
+    ctx.font = `21px ${SERIF}`;
+    ctx.fillStyle = INK;
+    let y = 166;
+    const steps = listing?.listing_type === 'sell'
+      ? ['Browse the marketplace and pick a copy.',
+         'Check the price and available stock.',
+         'Place an order — checkout is simulated.',
+         'Collect from the approved vendor.']
+      : ['Find a book and send a borrow request.',
+         'Wait for the owner to approve it.',
+         'Hand over the book on the agreed date.',
+         'Return it by the due date — or request more time.'];
+    steps.forEach((s, i) => {
+      ctx.fillStyle = PAPER_GOLD;
+      ctx.font = `bold 21px ${SERIF}`;
+      ctx.fillText(`${i + 1}.`, 54, y);
+      ctx.fillStyle = INK;
+      ctx.font = `21px ${SERIF}`;
+      y = wrapText(ctx, s, 92, y, W - 146, 28, 3) + 34;
+    });
+  } else if (index === 4) {
+    // Good-to-know / policies
+    heading('GOOD TO KNOW', 96);
+    rule(116);
+    ctx.font = `21px ${SERIF}`;
+    ctx.fillStyle = INK;
+    let y = 166;
+    const notes = [
+      'Borrowing is free between students — no payment needed.',
+      'Extensions need the owner’s approval before the due date.',
+      'Overdue reminders are sent once a day, never duplicated.',
+      'Book condition is recorded when listed, not when returned.',
+      'Your data stays on the college server — never sold or shared.',
+    ];
+    for (const n of notes) {
+      ctx.fillStyle = PAPER_GOLD;
+      ctx.fillText('•', 54, y);
+      ctx.fillStyle = INK;
+      y = wrapText(ctx, n, 82, y, W - 136, 28, 3) + 22;
+    }
+  } else {
+    // Colophon / closing note
+    heading('ABOUT MRV BOOKHUB', 96);
+    rule(116);
+    ctx.font = `22px ${SERIF}`;
+    ctx.fillStyle = INK;
+    let y = 172;
+    y = wrapText(ctx,
+      'MRV BookHub is a college book exchange and digital library built for students, faculty, librarians and vendors. Every copy on these shelves is part of a small, carefully maintained collection.',
+      54, y, W - 108, 32, 6) + 46;
+    ctx.fillStyle = PAPER_GOLD;
+    ctx.font = `italic 24px ${SERIF}`;
+    ctx.fillText('“A book in hand is worth a hundred on a shelf.”', 54, y + 20);
+    ctx.fillStyle = INK_SOFT;
+    ctx.font = `italic 18px ${SERIF}`;
+    ctx.fillText('— The MRV Library', 54, y + 54);
+  }
+
+  // Running footer with page number
+  ctx.font = `italic 16px ${SERIF}`;
+  ctx.fillStyle = INK_SOFT;
+  ctx.textAlign = 'center';
+  ctx.fillText(`— ${index + 1} —`, W / 2, H - 46);
+  ctx.textAlign = 'left';
+  return finish(c);
+}
+
 /** Left page = inside of the front cover: who / what / price. */
 export function makeLeftPageTexture(book) {
   const W = 512;

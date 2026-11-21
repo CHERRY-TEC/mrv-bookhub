@@ -5,176 +5,204 @@ import {
   makeSpineTexture,
   makeCoverTexture,
   makePagesTexture,
-  makeLeftPageTexture,
-  makeRightPageTexture,
+  makePageTexture,
 } from './textures';
+import { bookScroll, resetScroll, pushScroll } from './bookScrollStore';
 
 /**
- * An individual book.
- *
- * Local "reading pose": front cover faces +Z, spine at the -X edge.
- * Shelf pose: rotated +90° around Y so the spine faces the viewer.
- *
- * When held: the book follows a camera-relative position ("your hands"),
- * tilts naturally, and the front cover swings open around the spine hinge.
+ * A book you can read: click to fly it into your hands, then scroll to turn
+ * pages side by side. A single curved leaf sweeps across on each turn while
+ * the static left/right pages underneath update to the current spread.
  */
 
-// Where the book floats in camera space: left of centre (clear of the
-// action panel), just below centre, arm's length
 const HELD_OFFSET = new THREE.Vector3(-0.05, 0.02, -0.8);
-// Natural reading tilt applied in camera space
 const HELD_TILT = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.06, 0.1, -0.04));
-// Cover swings open almost flat so the spread faces the reader (like a real opened book)
-const OPEN_ANGLE = -3.05;
+const OPEN_ANGLE = Math.PI - 0.09;
+const TOTAL_SPREADS = 3; // 6 printed pages
 
-// Shared pages texture (one canvas for the whole app)
 let sharedPagesTexture = null;
 function getPagesTexture() {
   if (!sharedPagesTexture) sharedPagesTexture = makePagesTexture();
   return sharedPagesTexture;
 }
 
-// Spine textures are cached by title+color so repeated titles share GPU memory
+/* ---- texture caches ------------------------------------------------ */
 const spineCache = new Map();
+const coverCache = new Map();
+const pageCache = new Map();
+function keyFor(book) { return `${book.title}|${book.author}|${book.color}`; }
+
 function getCachedSpine(book) {
-  const key = `${book.title}|${book.author}|${book.color}`;
+  const key = keyFor(book);
   if (!spineCache.has(key)) {
     if (spineCache.size > 60) spineCache.delete(spineCache.keys().next().value);
     spineCache.set(key, makeSpineTexture(book));
   }
   return spineCache.get(key);
 }
-
-// Cover textures are only generated for books the user actually opens
-const coverCache = new Map();
 function getCachedCover(book) {
-  const key = `${book.title}|${book.author}|${book.color}`;
+  const key = keyFor(book);
   if (!coverCache.has(key)) {
     if (coverCache.size > 40) coverCache.delete(coverCache.keys().next().value);
     coverCache.set(key, makeCoverTexture(book));
   }
   return coverCache.get(key);
 }
-
-// Inner detail pages — generated only while a book is held open
-const leftPageCache = new Map();
-const rightPageCache = new Map();
-function pageKey(book) {
+function getCachedPage(book, index) {
   const l = book.listing;
-  return `${book.title}|${book.author}|${l ? `${l.id}|${l.listing_type}|${l.price}|${l.book_condition}` : 'decor'}`;
-}
-function getCachedLeftPage(book) {
-  const key = pageKey(book);
-  if (!leftPageCache.has(key)) {
-    if (leftPageCache.size > 24) leftPageCache.delete(leftPageCache.keys().next().value);
-    leftPageCache.set(key, makeLeftPageTexture(book));
+  const key = `${index}|${keyFor(book)}|${l ? `${l.id}|${l.listing_type}|${l.price}|${l.book_condition}` : 'decor'}`;
+  if (!pageCache.has(key)) {
+    if (pageCache.size > 48) pageCache.delete(pageCache.keys().next().value);
+    pageCache.set(key, makePageTexture(book, index));
   }
-  return leftPageCache.get(key);
+  return pageCache.get(key);
 }
-function getCachedRightPage(book) {
-  const key = pageKey(book);
-  if (!rightPageCache.has(key)) {
-    if (rightPageCache.size > 24) rightPageCache.delete(rightPageCache.keys().next().value);
-    rightPageCache.set(key, makeRightPageTexture(book));
+
+/* ---- curved turning leaf ------------------------------------------- */
+function makeTurnGeometry(width, height, segments = 16) {
+  const g = new THREE.BoxGeometry(width, height, 0.006, segments, 1, 1);
+  g.translate(width / 2, 0, 0); // hinge at spine (x = 0)
+  const pos = g.attributes.position;
+  g.userData.restX = new Float32Array(pos.array);
+  g.userData.restZ = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) g.userData.restZ[i] = pos.getZ(i);
+  g.userData.width = width;
+  return g;
+}
+
+function bendTurn(geo, bend) {
+  const pos = geo.attributes.position;
+  const restX = geo.userData.restX;
+  const restZ = geo.userData.restZ;
+  const w = geo.userData.width;
+  for (let i = 0; i < pos.count; i++) {
+    const u = w > 0 ? restX[i * 3] / w : 0; // 0 at spine, 1 at free edge
+    pos.setZ(i, restZ[i] + Math.sin(u * Math.PI) * bend * w * 0.28);
   }
-  return rightPageCache.get(key);
+  pos.needsUpdate = true;
+}
+
+/* ---- a static page plane ------------------------------------------- */
+function PagePlane({ texture, geometry }) {
+  const mat = useMemo(
+    () => new THREE.MeshBasicMaterial({
+      map: texture, toneMapped: false, side: THREE.DoubleSide,
+    }),
+    [texture]
+  );
+  return <mesh geometry={geometry} material={mat} />;
 }
 
 export default function Book({ book, isHeld, onSelect }) {
   const group = useRef();
-  const coverPivot = useRef();
+  const turnPivot = useRef();
   const { camera } = useThree();
   const [hovered, setHovered] = useState(false);
   const openAmount = useRef(0);
+  const [spread, setSpread] = useState(0); // current 0-based spread index
+  const [spreadVisible, setSpreadVisible] = useState(false);
 
-  const { w, h, d } = book.size; // cover-width(X) x height(Y) x thickness(Z), reading pose
-  const t = Math.min(0.02, Math.max(0.008, d * 0.07)); // cover board thickness
+  const { w, h, d } = book.size;
+  const t = Math.min(0.02, Math.max(0.008, d * 0.07));
 
-  const spineTex = useMemo(
-    () => getCachedSpine(book),
-    [book.title, book.color, book.author]
-  );
+  const spineTex = useMemo(() => getCachedSpine(book), [book.title, book.color, book.author]);
   const coverTex = useMemo(
     () => (isHeld || hovered ? getCachedCover(book) : null),
     [isHeld, hovered, book.title, book.color]
   );
-  // Detail pages only exist while the book is open in your hands
-  const leftPageTex = useMemo(
-    () => (isHeld ? getCachedLeftPage(book) : null),
-    [isHeld, book.title, book.author, book.listing]
-  );
-  const rightPageTex = useMemo(
-    () => (isHeld ? getCachedRightPage(book) : null),
-    [isHeld, book.title, book.author, book.listing]
-  );
   const pagesTex = getPagesTexture();
 
-  // Material sets. BoxGeometry material order: +X, -X, +Y, -Y, +Z, -Z.
+  const pageTextures = useMemo(
+    () => (isHeld ? Array.from({ length: 6 }, (_, i) => getCachedPage(book, i)) : []),
+    [isHeld, book.title, book.author, book.listing]
+  );
+
+  // Two static page planes + one turning leaf, all hinged geometry
+  const pageGeo = useMemo(() => makeTurnGeometry(w * 0.97, h * 0.96, 2), [w, h]);
+  const turnGeo = useMemo(() => makeTurnGeometry(w * 0.97, h * 0.96, 16), [w, h]);
+  useEffect(() => () => {
+    pageGeo.dispose(); turnGeo.dispose();
+  }, [pageGeo, turnGeo]);
+
+  // Materials for the static/turning surfaces
+  const coverMat = useMemo(
+    () => new THREE.MeshStandardMaterial({
+      map: coverTex || spineTex, color: coverTex ? '#ffffff' : book.color,
+      roughness: 0.66, metalness: 0.03,
+    }),
+    [coverTex, spineTex, book.color]
+  );
+  // The turning leaf shows the cover on the first turn, then printed pages
+  const turnTex = bookScroll.target <= 1 ? (coverTex || pagesTex) : (pageTextures[spread * 2] || pagesTex);
+  const paperMat = useMemo(() => new THREE.MeshBasicMaterial({
+    map: turnTex, toneMapped: false, side: THREE.DoubleSide,
+  }), [turnTex]);
+
+  /* ---- Book body materials (box order +X,-X,+Y,-Y,+Z,-Z) --------- */
   const mats = useMemo(() => {
-    const edge = new THREE.MeshStandardMaterial({ color: book.color, roughness: 0.7, metalness: 0.03 });
-    const spine = new THREE.MeshStandardMaterial({ map: spineTex, roughness: 0.68, metalness: 0.03 });
-    const coverFront = coverTex
-      ? new THREE.MeshStandardMaterial({ map: coverTex, roughness: 0.66, metalness: 0.03 })
-      : edge;
+    const edge = new THREE.MeshStandardMaterial({ color: book.color, roughness: 0.7 });
+    const spine = new THREE.MeshStandardMaterial({ map: spineTex, roughness: 0.68 });
     const inside = new THREE.MeshStandardMaterial({ color: '#efe7d3', roughness: 0.9 });
     const foreEdge = new THREE.MeshStandardMaterial({ color: '#e9dfc6', roughness: 0.95 });
-    // While open: real detail pages (basic material keeps the text crisp)
-    const coverInner = leftPageTex
-      ? new THREE.MeshBasicMaterial({ map: leftPageTex, toneMapped: false })
-      : inside;
-    const pageFront = rightPageTex
-      ? new THREE.MeshBasicMaterial({ map: rightPageTex, toneMapped: false })
-      : foreEdge;
     const pageSide = new THREE.MeshStandardMaterial({ map: pagesTex, roughness: 0.95 });
     const pageEdge = new THREE.MeshStandardMaterial({ color: '#efe6cf', roughness: 0.95 });
-
-    // Dispose previous set when inputs change
     return {
-      edge, spine, coverFront, inside, coverInner, pageFront, pageSide, pageEdge, foreEdge,
-      coverSet: [edge, edge, edge, edge, coverFront, coverInner],
-      pageSet: [pageSide, pageSide, pageEdge, pageEdge, pageFront, pageEdge],
+      edge, spine, inside, foreEdge,
+      coverSet: [edge, edge, edge, edge, coverMat, inside],
+      pageSet: [pageSide, pageSide, pageEdge, pageEdge, foreEdge, pageEdge],
       edgeSet: [edge, edge, edge, edge, edge, edge],
+      dispose: [edge, spine, inside, foreEdge, pageSide, pageEdge, coverMat, paperMat],
     };
-  }, [book.color, spineTex, coverTex, leftPageTex, rightPageTex, pagesTex]);
-
-  // Dispose GPU materials on unmount / rebuild
-  useEffect(() => () => {
-    [mats.edge, mats.spine, mats.coverFront, mats.inside, mats.coverInner, mats.pageFront,
-      mats.pageSide, mats.pageEdge, mats.foreEdge]
-      .forEach((m) => m.dispose());
-  }, [mats]);
+  }, [book.color, spineTex, pagesTex, coverMat, paperMat]);
+  useEffect(() => () => mats.dispose.forEach((m) => m.dispose()), [mats]);
 
   const shelfPos = useMemo(() => new THREE.Vector3(...book.position), [book.position]);
-  // Flat books lie cover-up; standing books show their spine to the viewer
-  const shelfQuat = useMemo(() => {
-    if (book.flat) {
-      return new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
-    }
-    return new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 2, 0));
-  }, [book.flat]);
+  const shelfQuat = useMemo(() => book.flat
+    ? new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
+    : new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 2, 0)), [book.flat]);
 
   const scratch = useMemo(() => ({
-    pos: new THREE.Vector3(),
-    quat: new THREE.Quaternion(),
-    right: new THREE.Vector3(),
-    tilt: HELD_TILT.clone(),
+    pos: new THREE.Vector3(), quat: new THREE.Quaternion(),
+    right: new THREE.Vector3(), tilt: HELD_TILT.clone(),
   }), []);
+
+  /* ---- flight/open + scroll --------------------------------------- */
+  const prevHeld = useRef(false);
+  const holdStart = useRef(0);
+  const flyP = useRef(0);
+  const OPEN_DELAY = 0.55;
 
   useEffect(() => {
     document.body.style.cursor = hovered || isHeld ? 'pointer' : 'auto';
     return () => { document.body.style.cursor = 'auto'; };
   }, [hovered, isHeld]);
 
-  // Demo-style beats: fly over (~0.6s), cover faces you, THEN swing open
-  const prevHeld = useRef(false);
-  const holdStart = useRef(0);
-  const flyP = useRef(0);
-  const OPEN_DELAY = 0.55; // seconds of "cover facing you" before opening
+  useEffect(() => {
+    bookScroll.active = isHeld;
+    if (!isHeld) resetScroll();
+    if (!isHeld) return;
+    const wheel = (e) => { e.preventDefault(); pushScroll(e.deltaY); };
+    let touchY = 0;
+    const start = (e) => { touchY = e.touches[0].clientY; };
+    const move = (e) => {
+      const y = e.touches[0].clientY;
+      pushScroll((touchY - y) * 2);
+      touchY = y;
+    };
+    window.addEventListener('wheel', wheel, { passive: false });
+    window.addEventListener('touchstart', start, { passive: true });
+    window.addEventListener('touchmove', move, { passive: true });
+    return () => {
+      bookScroll.active = false;
+      window.removeEventListener('wheel', wheel);
+      window.removeEventListener('touchstart', start);
+      window.removeEventListener('touchmove', move);
+    };
+  }, [isHeld]);
 
   useFrame((state, delta) => {
     const g = group.current;
     if (!g) return;
-    // Frame-rate independent lerp factor
     const blend = (rate) => 1 - Math.pow(0.0008, Math.min(delta, 0.1) * rate);
 
     if (isHeld) {
@@ -182,58 +210,67 @@ export default function Book({ book, isHeld, onSelect }) {
         prevHeld.current = true;
         holdStart.current = state.clock.elapsedTime;
         flyP.current = 0;
+        setSpread(0);
       }
       const heldFor = state.clock.elapsedTime - holdStart.current;
-      // Hold the cover closed for a beat, then ease it open
       const opening = heldFor > OPEN_DELAY;
       openAmount.current = THREE.MathUtils.damp(
         openAmount.current, opening ? 1 : 0, opening ? 3 : 8, delta
       );
+      const shouldShow = opening && openAmount.current > 0.15;
+      if (shouldShow !== spreadVisible) setSpreadVisible(shouldShow);
 
       scratch.pos.copy(HELD_OFFSET).applyQuaternion(camera.quaternion).add(camera.position);
-      // The open spread extends left of the hinge — nudge right to keep it centred
       scratch.right.set(1, 0, 0).applyQuaternion(camera.quaternion);
-      scratch.pos.addScaledVector(
-        scratch.right,
-        openAmount.current * book.size.w * 0.5 * g.scale.x
-      );
+      scratch.pos.addScaledVector(scratch.right, openAmount.current * w * 0.5 * g.scale.x);
       scratch.quat.copy(camera.quaternion).multiply(scratch.tilt);
 
-      // Slower, deliberate flight with a gentle lift arc
       flyP.current = THREE.MathUtils.damp(flyP.current, 1, 1.8, delta);
       g.position.lerp(scratch.pos, blend(0.65));
       g.quaternion.slerp(scratch.quat, blend(0.65));
       g.position.y += Math.sin(Math.PI * flyP.current) * 0.05;
       g.scale.setScalar(THREE.MathUtils.damp(g.scale.x, 1.0, 4, delta));
+      g.position.y += Math.sin(state.clock.elapsedTime * 1.6) * 0.006;
     } else {
       prevHeld.current = false;
+      if (spreadVisible) setSpreadVisible(false);
       flyP.current = THREE.MathUtils.damp(flyP.current, 0, 4, delta);
       openAmount.current = THREE.MathUtils.damp(openAmount.current, 0, 7, delta);
-
       scratch.pos.copy(shelfPos);
-      if (hovered) {
-        scratch.pos.y += 0.05;
-        scratch.pos.z += 0.05;
-      }
+      if (hovered) { scratch.pos.y += 0.05; scratch.pos.z += 0.05; }
       g.position.lerp(scratch.pos, blend(hovered ? 9 : 5));
       g.quaternion.slerp(shelfQuat, blend(5));
       g.scale.setScalar(THREE.MathUtils.damp(g.scale.x, hovered ? 1.05 : 1, 10, delta));
     }
 
-    if (coverPivot.current) {
-      coverPivot.current.rotation.y = openAmount.current * OPEN_ANGLE;
-    }
+    // Ease scroll and derive current spread / turn progress
+    bookScroll.current = THREE.MathUtils.damp(bookScroll.current, bookScroll.target, 1.8, delta);
+    const targetSpread = Math.min(TOTAL_SPREADS - 1, Math.floor(bookScroll.target / 2));
+    if (targetSpread !== spread) setSpread(targetSpread);
 
-    // Gentle breathing motion while held
-    if (isHeld) {
-      g.position.y += Math.sin(state.clock.elapsedTime * 1.6) * 0.006;
+    const turnP = bookScroll.current - Math.floor(bookScroll.current / 2) * 2;
+    // Turn progress within the current step (0..1) from fractional part
+    const stepFrac = bookScroll.current - Math.floor(bookScroll.current);
+    const turning = isHeld && openAmount.current > 0.5 && bookScroll.target > 0;
+    const midTurn = turning && stepFrac > 0.02 && stepFrac < 0.98;
+    if (turnPivot.current) {
+      turnPivot.current.visible = midTurn;
+      turnPivot.current.rotation.y = midTurn ? -OPEN_ANGLE * stepFrac : 0;
     }
+    if (midTurn) bendTurn(turnGeo, Math.sin(stepFrac * Math.PI));
+    else bendTurn(turnGeo, 0);
   });
 
   const handleClick = (e) => {
     e.stopPropagation();
     if (!isHeld) onSelect(book);
   };
+
+  const leftTex = pageTextures[spread * 2] || pagesTex;
+  const rightTex = pageTextures[spread * 2 + 1] || pagesTex;
+  // `spreadVisible` is React state (flipped by the frame loop after the
+  // open beat) so the spread meshes mount/unmount at the right time.
+  const showSpread = isHeld && spreadVisible;
 
   return (
     <group
@@ -244,26 +281,54 @@ export default function Book({ book, isHeld, onSelect }) {
       onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
       onPointerOut={() => setHovered(false)}
     >
-      {/* Back cover */}
+      {/* Back cover + page stack */}
       <mesh position={[0, 0, -(d / 2 - t / 2)]} castShadow receiveShadow material={mats.edgeSet}>
         <boxGeometry args={[w, h, t]} />
       </mesh>
-
-      {/* Pages block */}
       <mesh position={[0, 0, 0]} castShadow receiveShadow material={mats.pageSet}>
         <boxGeometry args={[w * 0.96, h * 0.96, Math.max(0.006, d - 2 * t)]} />
       </mesh>
-
-      {/* Spine strip (binding at the left edge) */}
       <mesh position={[-w / 2 + t / 2, 0, 0]} castShadow material={mats.spine}>
         <boxGeometry args={[t * 1.2, h, d]} />
       </mesh>
 
-      {/* Front cover, hinged on the spine */}
-      <group ref={coverPivot} position={[-w / 2, 0, d / 2 - t / 2]}>
-        <mesh position={[w / 2, 0, 0]} castShadow receiveShadow material={mats.coverSet}>
-          <boxGeometry args={[w, h, t]} />
-        </mesh>
+      {/* Front cover — visible on the shelf, swung flat once opened */}
+      {!showSpread && (
+        <group position={[-w / 2 + t / 2, 0, d / 2 - t / 2]}>
+          <mesh material={mats.coverSet} castShadow receiveShadow>
+            <boxGeometry args={[w, h, t]} />
+          </mesh>
+        </group>
+      )}
+      {/* While reading, the cloth cover lies flat on the left of the spread */}
+      {showSpread && (
+        <group position={[-w / 2 + t / 2, 0, d / 2 + 0.006]} rotation={[0, -OPEN_ANGLE, 0]}>
+          <mesh material={coverMat}>
+            <boxGeometry args={[w, h, t]} />
+          </mesh>
+        </group>
+      )}
+
+      {/* Open spread: static left + right pages, hinged at the spine */}
+      {showSpread && (
+        <group position={[-w / 2 + t / 2, 0, d / 2 + 0.012]}>
+          {/* Left page faces up after the cover opens (rotated flat to -X) */}
+          <group rotation={[0, -OPEN_ANGLE, 0]}>
+            <PagePlane texture={leftTex} geometry={pageGeo} />
+          </group>
+          {/* Right page stays on the right */}
+          <PagePlane texture={rightTex} geometry={pageGeo} />
+        </group>
+      )}
+
+      {/* The turning leaf sweeps right-to-left as you scroll (visibility
+          is driven imperatively in useFrame — React never re-renders here) */}
+      <group
+        ref={turnPivot}
+        position={[-w / 2 + t / 2, 0, d / 2 + 0.022]}
+        visible={false}
+      >
+        <mesh geometry={turnGeo} material={paperMat} />
       </group>
     </group>
   );
