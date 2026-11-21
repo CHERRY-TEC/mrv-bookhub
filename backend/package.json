@@ -1,0 +1,38 @@
+{
+  "name": "mrv-bookhub-backend",
+  "version": "1.0.0",
+  "description": "Backend API for MRV BookHub - college book exchange and digital library platform",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "db:init": "node database/init.js",
+    "db:seed": "node database/seed.js",
+    "db:reset": "node database/init.js --fresh && node database/seed.js"
+  },
+  "keywords": [
+    "books",
+    "library",
+    "borrowing",
+    "express",
+    "sqlite"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "better-sqlite3": "^11.7.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.16"
+  },
+  "allowScripts": {
+    "bcrypt@5.1.1": true,
+    "better-sqlite3@11.10.0": true
+  }
+}
