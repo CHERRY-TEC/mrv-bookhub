@@ -1,0 +1,28 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.js",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": [
+          "server.js",
+          "config/**",
+          "controllers/**",
+          "database/schema.sql",
+          "database/seed.js",
+          "middleware/**",
+          "routes/**",
+          "services/**",
+          "utils/**",
+          "node_modules/better-sqlite3/**",
+          "node_modules/bcrypt/**"
+        ]
+      }
+    }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "api/index.js" }
+  ]
+}
