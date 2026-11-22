@@ -340,10 +340,12 @@ export default function Book({ book, isHeld, onSelect }) {
       fromScale.current = startScale.current;
     }
 
-    if (!isHeld && H && phase.current !== 'idle') {
-      // --- begin close: flip pages back then fly home ---
+    if (!isHeld && H && !['idle', 'closePageBack', 'coverClose', 'flyOut'].includes(phase.current)) {
+      // --- begin close: flip pages back, shut the cover, fly home ---
+      // Only trigger once; otherwise an in-progress close gets restarted.
       phase.current = 'closePageBack';
       phaseT.current = 0;
+      turn.current.active = false;
     }
 
     // ---- phase: fly in (arc + spin + scale) ----
@@ -486,9 +488,14 @@ export default function Book({ book, isHeld, onSelect }) {
     if (!isHeld) onSelect(book);
   };
 
-  const shelfQuat = useMemo(() => book.flat
-    ? new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
-    : new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 2, 0)), [book.flat]);
+  const shelfQuat = useMemo(() => {
+    // Left wall (Z>0): spine faces -Z (toward the aisle).
+    // Right wall (Z<0): spine faces +Z (toward the aisle).
+    const y = book.side === 'left' ? -Math.PI / 2 : Math.PI / 2;
+    return book.flat
+      ? new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, y, 0))
+      : new THREE.Quaternion().setFromEuler(new THREE.Euler(0, y, 0));
+  }, [book.flat, book.side]);
 
   return (
     <group ref={group} position={book.position} quaternion={shelfQuat}>

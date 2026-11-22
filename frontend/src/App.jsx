@@ -3,6 +3,8 @@ const Scene = lazy(() => import('./three/Scene'));
 import { scrollStore } from './three/scrollStore';
 import ReadingOverlay from './ReadingOverlay';
 import api from './api';
+import { FLOORS, libraryStore, subscribeLibrary, setBillerOpen, goToFloor } from './three/libraryStore';
+import { cartStore, subscribeCart, addToCart, removeFromCart, clearCart, makeReceipt } from './three/cartStore';
 
 /* ------------------------------------------------------------------ */
 /* Small UI helpers                                                    */
@@ -111,10 +113,15 @@ function LoginModal({ open, onClose, onLogin }) {
 /* Book detail panel (appears when a book flies to your hands)         */
 /* ------------------------------------------------------------------ */
 
-function BookPanel({ book, onClose, onAction, user, onLoginPrompt }) {
+function BookPanel({ book, onClose, onAction, user, onLoginPrompt, onAddToBill }) {
   const [detail, setDetail] = useState(null);
   const [busy, setBusy] = useState('');
   const [days, setDays] = useState(7);
+  const [inCart, setInCart] = useState(false);
+
+  useEffect(() => subscribeCart((s) => {
+    setInCart(s.items.some((i) => i.key === book?.key));
+  }), [book]);
 
   useEffect(() => {
     setDetail(null);
@@ -210,7 +217,117 @@ function BookPanel({ book, onClose, onAction, user, onLoginPrompt }) {
           </p>
         )}
 
+        <button className="btn-secondary panel-cart-btn" disabled={inCart}
+          onClick={() => { if (onAddToBill(book)) { setInCart(true); onAction(`${book.title} placed on the counter`, 'ok'); } }}>
+          {inCart ? 'On the counter' : 'Put on the counter'}
+        </button>
+
         <p className="panel-hint">Click anywhere else or press Esc to put the book back.</p>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Floor selector + biller counter panel                                */
+/* ------------------------------------------------------------------ */
+
+function FloorNav({ floor }) {
+  return (
+    <div className="floor-nav" aria-label="Library floors">
+      {FLOORS.map((f) => (
+        <button key={f.id} className={floor === f.id ? 'active' : ''}
+          onClick={() => goToFloor(f.id)} title={`${f.name} — ${f.category}`}>
+          <span className="floor-nav-num">{f.short}</span>
+          <span className="floor-nav-label">{f.name}<small>{f.category}</small></span>
+        </button>
+      ))}
+      <button className="biller-nav-btn" onClick={() => setBillerOpen(true)} title="Open the counter bill">
+        <span className="floor-nav-num">₹</span>
+        <span className="floor-nav-label">Biller<small>Print your receipt</small></span>
+      </button>
+    </div>
+  );
+}
+
+function BillerPanel({ open, onClose, floor, user, onAction }) {
+  const [cart, setCart] = useState({ ...cartStore, items: [...cartStore.items] });
+  useEffect(() => subscribeCart(setCart), []);
+
+  if (!open) return null;
+  const total = cart.items.reduce((s, b) => s + b.price, 0);
+  const receipt = cart.receipt;
+  const floorName = FLOORS[floor].name;
+
+  const issueReceipt = () => {
+    const r = makeReceipt(floorName);
+    onAction(`Receipt issued — total ₹${r.total.toFixed(2)}`, 'ok');
+  };
+
+  const printReceipt = () => {
+    if (!receipt) return;
+    const w = window.open('', '_blank');
+    if (!w) { onAction('Allow pop-ups to print the receipt', 'error'); return; }
+    w.document.write(`<html><head><title>MRV BookHub — Receipt</title>
+      <style>body{font-family:Consolas,'Courier New',monospace;padding:34px;color:#241a12;max-width:420px}
+      h1{font-size:22px;margin:0 0 2px}hr{border:0;border-top:2px dashed #333;margin:14px 0}
+      pre{font-family:inherit;font-size:14px;line-height:1.7;white-space:pre-wrap}
+      .big{font-size:18px;font-weight:bold;text-align:right}</style></head><body>
+      <h1>MRV BOOKHUB</h1>
+      <pre>${floorName}\n${FLOORS[floor].category}\n${receipt.date}\nCustomer: ${user ? user.full_name : 'Guest'}</pre>
+      <hr/>
+      <pre>ITEM                            AMOUNT\n${receipt.lines.join('\n')}</pre>
+      <hr/>
+      <div class="big">TOTAL  Rs.${receipt.total.toFixed(2)}</div>
+      <p><small>Simulated counter — no payment collected. Thank you!</small></p></body></html>`);
+    w.document.close();
+    w.print();
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal biller-modal" onClick={(e) => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose} aria-label="Close biller">×</button>
+        <h2>Counter · {floorName}</h2>
+        <p className="modal-sub">{FLOORS[floor].category} — your books are on the table</p>
+
+        {cart.items.length === 0 && <p className="panel-note">No books on the counter yet. Click a book, then “Put on the counter”.</p>}
+        {cart.items.length > 0 && (
+          <table className="bill-table">
+            <thead><tr><th>Book</th><th>Price</th><th></th></tr></thead>
+            <tbody>
+              {cart.items.map((b) => (
+                <tr key={b.key}><td>{b.title}<small> by {b.author}</small></td>
+                  <td>₹{b.price.toFixed(2)}</td>
+                  <td><button className="bill-remove" onClick={() => removeFromCart(b.key)}>×</button></td></tr>
+              ))}
+            </tbody>
+            <tfoot><tr><td colSpan="2">Total</td><td>₹{total.toFixed(2)}</td></tr></tfoot>
+          </table>
+        )}
+
+        {receipt ? (
+          <div className="receipt-box">
+            <div className="receipt-note">{[
+              '  MRV BOOKHUB  ',
+              floorName,
+              receipt.date,
+              '------------------------------',
+              ...receipt.lines,
+              '------------------------------',
+              `TOTAL                 Rs.${receipt.total.toFixed(2)}`,
+              '  Thank you!  ',
+            ].join('\n')}</div>
+            <div className="bill-actions">
+              <button className="btn-primary" onClick={printReceipt}>Print receipt</button>
+              <button className="btn-secondary" onClick={() => { clearCart(); onAction('Counter cleared'); }}>Done</button>
+            </div>
+          </div>
+        ) : (
+          <button className="btn-primary" onClick={issueReceipt} disabled={cart.items.length === 0}>
+            Make bill · ₹{total.toFixed(2)}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -228,7 +345,17 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [unread, setUnread] = useState(0);
   const [search, setSearch] = useState('');
+  const [floor, setFloor] = useState(libraryStore.floor);
+  const [billerOpen, setBillerLocal] = useState(false);
+  const [, setCartVersion] = useState(0);
   const toastTimer = useRef(null);
+
+  useEffect(() => subscribeCart(() => setCartVersion((n) => n + 1)), []);
+
+  useEffect(() => subscribeLibrary((s) => {
+    setFloor(s.floor);
+    setBillerLocal(s.billerOpen);
+  }), []);
 
   /* Load catalogue from the backend ------------------------------- */
   useEffect(() => {
@@ -339,6 +466,9 @@ export default function App() {
           />
         </Suspense>
       </div>
+
+      {/* Floor selector */}
+      <FloorNav floor={floor} />
 
       {/* Header */}
       <header className="topbar">
@@ -477,9 +607,12 @@ export default function App() {
         onClose={() => handleSelectBook(null)}
         onAction={showToast}
         onLoginPrompt={() => setLoginOpen(true)}
+        onAddToBill={(book) => addToCart({ ...book, key: book.key })}
       />
 
       <ReadingOverlay active={Boolean(heldBook)} />
+      <BillerPanel open={billerOpen} onClose={() => setBillerOpen(false)} floor={floor}
+        user={user} onAction={showToast} />
       <LoginModal open={loginOpen} onClose={() => setLoginOpen(false)} onLogin={handleLogin} />
       <Toast toast={toast} />
     </div>

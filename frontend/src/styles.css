@@ -530,3 +530,71 @@ body {
     to { opacity: 1; transform: translateY(0); }
   }
 }
+
+/* ---------- Floor selector ---------- */
+.floor-nav {
+  position: fixed;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.floor-nav button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 186px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink-dim);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 0.2s, color 0.2s;
+}
+.floor-nav button:hover { border-color: var(--accent); color: var(--ink); }
+.floor-nav button.active { border-color: var(--accent); color: var(--ink); background: #2a1d12; }
+.floor-nav-num {
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #241a12;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+.floor-nav-label { font-size: 13px; font-weight: 600; line-height: 1.25; }
+.floor-nav-label small { display: block; font-size: 10px; font-weight: normal; opacity: 0.7; }
+
+/* ---------- Biller / receipt ---------- */
+.biller-modal { max-width: 540px; }
+.bill-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+.bill-table td, .bill-table th { padding: 9px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+.bill-table th { color: var(--ink-dim); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.bill-table tfoot td { font-weight: bold; font-size: 16px; border-top: 2px solid var(--accent); }
+.receipt-note {
+  font-family: Consolas, 'Courier New', monospace;
+  background: #2a1d12;
+  border: 1px dashed var(--accent);
+  padding: 16px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 16px 0;
+}
+.panel-cart-btn { width: 100%; margin-top: 10px; }
+.bill-remove {
+  border: 0; background: none; color: var(--danger); font-size: 20px;
+  cursor: pointer; line-height: 1;
+}
+.bill-table small { display: block; color: var(--ink-dim); font-size: 11px; }
+.receipt-box { margin-top: 12px; }
+.bill-actions { display: flex; gap: 10px; }
+.bill-actions .btn-primary, .bill-actions .btn-secondary { flex: 1; }
+.floor-nav .biller-nav-btn { margin-top: 8px; border-color: var(--accent); }
