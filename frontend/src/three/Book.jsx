@@ -245,26 +245,29 @@ export default function Book({ book, isHeld, onSelect }) {
       const shouldShow = opening && openAmount.current > 0.15;
       if (shouldShow !== spreadVisible) setSpreadVisible(shouldShow);
 
+      // Build ONE stable target (offset + centering + arc + breathing), then
+      // ease the group toward it. Adding motion AFTER a lerp each frame is
+      // what caused the visible shaking while turning pages.
+      flyP.current = THREE.MathUtils.damp(flyP.current, 1, 1.5, delta);
+      const settle = 1 - flyP.current;
+      const arc = Math.sin(Math.PI * Math.pow(flyP.current, 0.7));
+      const breath = Math.sin(state.clock.elapsedTime * 1.1) * 0.003;
+
       scratch.pos.copy(HELD_OFFSET).applyQuaternion(camera.quaternion).add(camera.position);
       scratch.right.set(1, 0, 0).applyQuaternion(camera.quaternion);
       scratch.pos.addScaledVector(scratch.right, openAmount.current * w * 0.5 * g.scale.x);
+      scratch.pos.y += arc * 0.06 + breath;
+      g.position.lerp(scratch.pos, blend(0.9));
 
-      // Smooth, weighty flight with a gentle arc and a tilt that settles
-      flyP.current = THREE.MathUtils.damp(flyP.current, 1, 1.5, delta);
-      g.position.lerp(scratch.pos, blend(0.8));
-      // arc peaks early, then eases down into the reading pose
-      const arc = Math.sin(Math.PI * Math.pow(flyP.current, 0.7));
-      g.position.y += arc * 0.07;
-      const settle = 1 - flyP.current;
+      // Stable rotation target: tilt eases from "arriving" to "reading"
       scratch.tilt.setFromEuler(new THREE.Euler(
         0.06 + settle * 0.12,
         0.1 + settle * 0.18,
         -0.04 + settle * 0.1
       ));
       scratch.quat.copy(camera.quaternion).multiply(scratch.tilt);
-      g.quaternion.slerp(scratch.quat, blend(0.8));
+      g.quaternion.slerp(scratch.quat, blend(0.9));
       g.scale.setScalar(THREE.MathUtils.damp(g.scale.x, 1.0, 3, delta));
-      g.position.y += Math.sin(state.clock.elapsedTime * 1.6) * 0.006;
     } else {
       prevHeld.current = false;
       if (spreadVisible) setSpreadVisible(false);
@@ -344,11 +347,9 @@ export default function Book({ book, isHeld, onSelect }) {
         if (leaf) { leaf.visible = false; leaf.rotation.y = 0; leaf.position.set(0, 0, 0); }
       });
     }
-    // update which printed spread is visible (commits at the flip midpoint)
-    const committed = turnRef.current.flip < 0.5
-      ? turnRef.current.shownStep
-      : (turnRef.current.from + (turnRef.current.dir > 0 ? 0.5 : -0.5));
-    const targetSpread = Math.max(0, Math.min(TOTAL_SPREADS - 1, Math.floor(committed / 2)));
+    // Commit the printed spread only when the flip has fully settled —
+    // swapping textures mid-turn reads as a visible pop/shake.
+    const targetSpread = Math.max(0, Math.min(TOTAL_SPREADS - 1, Math.floor(turnRef.current.shownStep / 2)));
     if (targetSpread !== spread) setSpread(targetSpread);
   });
 
