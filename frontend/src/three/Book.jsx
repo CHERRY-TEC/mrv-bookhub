@@ -7,7 +7,8 @@ import {
   makePagesTexture,
   makePageTexture,
 } from './textures';
-import { bookScroll, resetScroll, pushScroll } from './bookScrollStore';
+import { bookScroll, resetScroll, pushScroll, turnBy, setShownStep } from './bookScrollStore';
+import { playPageFlip } from './pageSound';
 
 /**
  * A book you can read: click to fly it into your hands, then scroll to turn
@@ -58,14 +59,13 @@ function getCachedPage(book, index) {
   return pageCache.get(key);
 }
 
-/* ---- curved turning leaf ------------------------------------------- */
+/* ---- curved turning page ------------------------------------------- */
 function makeTurnGeometry(width, height, segments = 16) {
-  const g = new THREE.BoxGeometry(width, height, 0.006, segments, 1, 1);
+  // A single plane (not a box) avoids double-face ghosting while bending.
+  const g = new THREE.PlaneGeometry(width, height, segments, 2);
   g.translate(width / 2, 0, 0); // hinge at spine (x = 0)
   const pos = g.attributes.position;
   g.userData.restX = new Float32Array(pos.array);
-  g.userData.restZ = new Float32Array(pos.count * 3);
-  for (let i = 0; i < pos.count; i++) g.userData.restZ[i] = pos.getZ(i);
   g.userData.width = width;
   return g;
 }
@@ -73,16 +73,11 @@ function makeTurnGeometry(width, height, segments = 16) {
 function bendTurn(geo, bend, sweep = 0) {
   const pos = geo.attributes.position;
   const restX = geo.userData.restX;
-  const restZ = geo.userData.restZ;
   const w = geo.userData.width;
   for (let i = 0; i < pos.count; i++) {
     const u = w > 0 ? restX[i * 3] / w : 0; // 0 at spine, 1 at free edge
-    // Real page curl: a smooth wave that starts at the free edge and rolls
-    // toward the spine as the turn progresses. `sweep` shifts the wave peak.
     const wave = Math.sin((u * 0.85 + sweep * 0.35) * Math.PI);
-    // Stronger curl — a real page lifts well off the stack mid-turn
-    const roll = wave * (0.55 + 0.25 * sweep) * bend;
-    pos.setZ(i, restZ[i] + roll * w);
+    pos.setZ(i, wave * (0.55 + 0.25 * sweep) * bend * w);
   }
   pos.needsUpdate = true;
 }
@@ -92,15 +87,71 @@ function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-/* ---- a static page plane ------------------------------------------- */
-function PagePlane({ texture, geometry, planeRef }) {
-  const mat = useMemo(
-    () => new THREE.MeshBasicMaterial({
-      map: texture, toneMapped: false, side: THREE.DoubleSide,
-    }),
-    [texture]
+/* ---- a page plane with a soft gutter shadow ------------------------ */
+function makeShadowMaterial() {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 8;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 256, 0);
+  grad.addColorStop(0, 'rgba(40,25,10,0.32)');
+  grad.addColorStop(0.25, 'rgba(40,25,10,0.12)');
+  grad.addColorStop(0.6, 'rgba(40,25,10,0.0)');
+  grad.addColorStop(1, 'rgba(40,25,10,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 256, 8);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.MeshBasicMaterial({
+    map: tex, transparent: true, opacity: 0, toneMapped: false,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+}
+
+function PagePlane({ texture, backTexture, geometry, shadowGeometry, planeRef }) {
+  const mat = useMemo(() => {
+    if (!backTexture) {
+      return new THREE.MeshBasicMaterial({
+        map: texture, toneMapped: false, side: THREE.DoubleSide,
+      });
+    }
+    // Show a different, correctly-oriented printed page on each side.
+    return new THREE.ShaderMaterial({
+      side: THREE.DoubleSide,
+      uniforms: {
+        frontMap: { value: texture },
+        backMap: { value: backTexture },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D frontMap;
+        uniform sampler2D backMap;
+        varying vec2 vUv;
+        void main() {
+          // At rest we look at the front of the sheet. As the page rotates
+          // past the reader, the reverse becomes visible and carries the
+          // incoming page — mirrored back so it reads correctly.
+          vec4 c = gl_FrontFacing
+            ? texture2D(frontMap, vUv)
+            : texture2D(backMap, vec2(1.0 - vUv.x, vUv.y));
+          gl_FragColor = c;
+        }
+      `,
+    });
+  }, [texture, backTexture]);
+  const shadowMat = useMemo(() => makeShadowMaterial(), []);
+  useEffect(() => () => { shadowMat.map?.dispose(); shadowMat.dispose(); }, [shadowMat]);
+  return (
+    <group ref={planeRef}>
+      <mesh geometry={geometry} material={mat} frustumCulled={false} />
+      <mesh geometry={shadowGeometry} material={shadowMat} position={[0, 0, 0.002]} frustumCulled={false} />
+    </group>
   );
-  return <mesh ref={planeRef} geometry={geometry} material={mat} frustumCulled={false} />;
 }
 
 export default function Book({ book, isHeld, onSelect }) {
@@ -114,6 +165,8 @@ export default function Book({ book, isHeld, onSelect }) {
 
   const { w, h, d } = book.size;
   const t = Math.min(0.02, Math.max(0.008, d * 0.07));
+  // A few thin sheets under the turning page give the stack real thickness
+  const underLeaves = useRef([]);
 
   const spineTex = useMemo(() => getCachedSpine(book), [book.title, book.color, book.author]);
   const coverTex = useMemo(
@@ -194,14 +247,23 @@ export default function Book({ book, isHeld, onSelect }) {
       pushScroll((touchY - y) * 2);
       touchY = y;
     };
+    const key = (e) => {
+      if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(e.key)) {
+        e.preventDefault(); turnBy(1);
+      } else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) {
+        e.preventDefault(); turnBy(-1);
+      }
+    };
     window.addEventListener('wheel', wheel, { passive: false });
     window.addEventListener('touchstart', start, { passive: true });
     window.addEventListener('touchmove', move, { passive: true });
+    window.addEventListener('keydown', key);
     return () => {
       bookScroll.active = false;
       window.removeEventListener('wheel', wheel);
       window.removeEventListener('touchstart', start);
       window.removeEventListener('touchmove', move);
+      window.removeEventListener('keydown', key);
     };
   }, [isHeld]);
 
@@ -266,10 +328,12 @@ export default function Book({ book, isHeld, onSelect }) {
         turnRef.current.flip = 1;          // start a forward flip
         turnRef.current.dir = 1;
         turnRef.current.from = turnRef.current.shownStep;
+        playPageFlip(1);
       } else if (target < turnRef.current.shownStep) {
         turnRef.current.flip = 1;          // start a reverse flip
         turnRef.current.dir = -1;
         turnRef.current.from = turnRef.current.shownStep;
+        playPageFlip(-1);
       }
     }
     // advance the current flip (duration ~0.62s), then commit the new page
@@ -286,14 +350,45 @@ export default function Book({ book, isHeld, onSelect }) {
         rightPlane.current.rotation.y = OPEN_ANGLE * e * 0.9 * turnRef.current.dir;
         rightPlane.current.position.z = mid * w * 0.25;
         rightPlane.current.position.y = mid * h * 0.04;
+        const shadow = rightPlane.current.children[1]?.material;
+        if (shadow) shadow.opacity = mid * 0.85;
+        // Hide readable print mid-turn — a real page is a blur of paper then;
+        // this also avoids showing mirrored text on the sheet's reverse.
+        const sheet = rightPlane.current.children[0]?.material;
+        if (sheet?.uniforms) {
+          sheet.uniforms.frontMap.value = mid > 0.25 ? pagesTex : rightTex;
+          sheet.uniforms.backMap.value = mid > 0.25 ? pagesTex : (pageTextures[Math.min(5, spread * 2 + 2)] || pagesTex);
+        }
+        // stacked sheets peel with a slight stagger
+        underLeaves.current.forEach((leaf, i) => {
+          if (!leaf) return;
+          const stagger = Math.min(1, Math.max(0, (p - 0.06 * (i + 1)) / 0.94));
+          const se = easeInOutCubic(stagger);
+          const sm = Math.sin(stagger * Math.PI);
+          leaf.rotation.y = OPEN_ANGLE * se * 0.9 * turnRef.current.dir;
+          leaf.position.z = mid * w * 0.22 - (i + 1) * 0.003;
+          leaf.position.y = sm * h * 0.03;
+        });
       }
       bendTurn(curlGeo, mid, p);
       if (turnRef.current.flip === 0) {
         turnRef.current.shownStep = target;
+        setShownStep(target);
+        bookScroll.turns++;
         if (rightPlane.current) {
           rightPlane.current.rotation.y = 0;
           rightPlane.current.position.set(0, 0, 0);
+          const shadow = rightPlane.current.children[1]?.material;
+          if (shadow) shadow.opacity = 0;
+          const sheet = rightPlane.current.children[0]?.material;
+          if (sheet?.uniforms) {
+            sheet.uniforms.frontMap.value = rightTex;
+            sheet.uniforms.backMap.value = pageTextures[Math.min(5, spread * 2 + 2)] || pagesTex;
+          }
         }
+        underLeaves.current.forEach((leaf) => {
+          if (leaf) { leaf.rotation.y = 0; leaf.position.set(0, 0, 0); }
+        });
         bendTurn(curlGeo, 0, 0);
       }
     } else {
@@ -301,7 +396,17 @@ export default function Book({ book, isHeld, onSelect }) {
       if (rightPlane.current) {
         rightPlane.current.rotation.y = 0;
         rightPlane.current.position.set(0, 0, 0);
+        const shadow = rightPlane.current.children[1]?.material;
+        if (shadow) shadow.opacity = 0;
+        const sheet = rightPlane.current.children[0]?.material;
+        if (sheet?.uniforms) {
+          sheet.uniforms.frontMap.value = rightTex;
+          sheet.uniforms.backMap.value = pageTextures[Math.min(5, spread * 2 + 2)] || pagesTex;
+        }
       }
+      underLeaves.current.forEach((leaf) => {
+        if (leaf) { leaf.rotation.y = 0; leaf.position.set(0, 0, 0); }
+      });
     }
     // update which printed spread is visible (commits at the flip midpoint)
     const committed = turnRef.current.flip < 0.5
@@ -362,12 +467,34 @@ export default function Book({ book, isHeld, onSelect }) {
       {/* Open spread: static left + right pages, hinged at the spine */}
       {showSpread && (
         <group position={[-w / 2 + t / 2, 0, d / 2 + 0.012]}>
-          {/* Left page faces up after the cover opens (rotated flat to -X) */}
+          {/* Left page lies flat to the left of the spine. Mirror the plane
+              locally so its print reads correctly from the reader's side. */}
           <group rotation={[0, -OPEN_ANGLE, 0]}>
-            <PagePlane texture={leftTex} geometry={pageGeo} />
+            <group scale={[-1, 1, 1]}>
+              <PagePlane texture={leftTex} geometry={pageGeo} shadowGeometry={pageGeo} />
+            </group>
           </group>
-          {/* Right page — curls and lifts as it rolls over */}
-          <PagePlane texture={rightTex} geometry={curlGeo} planeRef={rightPlane} />
+          {/* Thin sheets beneath the turning page — they peel with a stagger */}
+          {[0, 1, 2].map((i) => (
+            <group
+              key={i}
+              ref={(el) => { underLeaves.current[i] = el; }}
+              position={[0, 0, -0.003 * (i + 1)]}
+            >
+              <mesh geometry={pageGeo} frustumCulled={false}>
+                <meshBasicMaterial color="#efe4c9" side={THREE.DoubleSide} toneMapped={false} />
+              </mesh>
+            </group>
+          ))}
+          {/* Right page — curls and lifts as it rolls over; its reverse shows
+              the next left page, printed correctly (like a real sheet). */}
+          <PagePlane
+            texture={rightTex}
+            backTexture={pageTextures[Math.min(5, spread * 2 + 2)] || pagesTex}
+            geometry={curlGeo}
+            shadowGeometry={pageGeo}
+            planeRef={rightPlane}
+          />
         </group>
       )}
 

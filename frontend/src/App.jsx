@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
-import Scene from './three/Scene';
+import { useEffect, useState, useCallback, useRef, lazy, Suspense } from 'react';
+const Scene = lazy(() => import('./three/Scene'));
 import { scrollStore } from './three/scrollStore';
+import ReadingOverlay from './ReadingOverlay';
 import api from './api';
 
 /* ------------------------------------------------------------------ */
@@ -226,6 +227,7 @@ export default function App() {
   const [loginOpen, setLoginOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [unread, setUnread] = useState(0);
+  const [search, setSearch] = useState('');
   const toastTimer = useRef(null);
 
   /* Load catalogue from the backend ------------------------------- */
@@ -326,11 +328,16 @@ export default function App() {
     <div className={`app${heldBook ? ' book-held' : ''}`}>
       {/* 3D canvas fills the viewport */}
       <div className="canvas-wrap">
-        <Scene
-          apiBooks={apiBooks}
-          heldKey={heldBook?.key || null}
-          onSelectBook={handleSelectBook}
-        />
+        <Suspense fallback={<div className="scene-loading">Opening the library…</div>}>
+          <Scene
+            apiBooks={search.trim()
+              ? apiBooks.filter((b) =>
+                  `${b.title} ${b.author}`.toLowerCase().includes(search.trim().toLowerCase()))
+              : apiBooks}
+            heldKey={heldBook?.key || null}
+            onSelectBook={handleSelectBook}
+          />
+        </Suspense>
       </div>
 
       {/* Header */}
@@ -348,6 +355,20 @@ export default function App() {
           <a href="#library">Library</a>
           <a href="#market">Marketplace</a>
         </nav>
+
+        <div className="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search books…"
+            aria-label="Search books on the shelf"
+          />
+          {search && (
+            <button className="search-clear" onClick={() => setSearch('')} aria-label="Clear search">×</button>
+          )}
+        </div>
 
         <div className="topbar-actions">
           {user ? (
@@ -458,6 +479,7 @@ export default function App() {
         onLoginPrompt={() => setLoginOpen(true)}
       />
 
+      <ReadingOverlay active={Boolean(heldBook)} />
       <LoginModal open={loginOpen} onClose={() => setLoginOpen(false)} onLogin={handleLogin} />
       <Toast toast={toast} />
     </div>

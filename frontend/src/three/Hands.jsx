@@ -8,18 +8,26 @@ import * as THREE from 'three';
  */
 
 function Finger({ length = 0.075, radius = 0.014, curl = 0.55, color }) {
-  const ref = useRef();
-  // Simple 2-segment finger made of two capsules with a bend
   return (
-    <group ref={ref}>
+    <group>
       <mesh position={[0, 0, -length * 0.25]} castShadow>
-        <capsuleGeometry args={[radius, length * 0.5, 4, 8]} />
-        <meshStandardMaterial color={color} roughness={0.85} />
+        <capsuleGeometry args={[radius, length * 0.5, 6, 10]} />
+        <meshStandardMaterial color={color} roughness={0.78} />
+      </mesh>
+      {/* knuckle */}
+      <mesh position={[0, radius * 0.6, -length * 0.48]} castShadow>
+        <sphereGeometry args={[radius * 1.05, 8, 6]} />
+        <meshStandardMaterial color={color} roughness={0.8} />
       </mesh>
       <group position={[0, 0, -length * 0.55]} rotation={[curl, 0, 0]}>
         <mesh position={[0, 0, -length * 0.22]} castShadow>
-          <capsuleGeometry args={[radius * 0.9, length * 0.4, 4, 8]} />
-          <meshStandardMaterial color={color} roughness={0.85} />
+          <capsuleGeometry args={[radius * 0.9, length * 0.4, 6, 10]} />
+          <meshStandardMaterial color={color} roughness={0.78} />
+        </mesh>
+        {/* fingertip */}
+        <mesh position={[0, 0, -length * 0.45]} castShadow>
+          <sphereGeometry args={[radius * 0.88, 8, 6]} />
+          <meshStandardMaterial color={color} roughness={0.76} />
         </mesh>
       </group>
     </group>
@@ -30,14 +38,18 @@ function Hand({ side = 1, color = '#e8b48c' }) {
   // side: 1 = right hand, -1 = left hand
   return (
     <group scale={[side, 1, 1]}>
-      {/* Palm */}
+      {/* Palm + soft heel of the hand */}
       <mesh castShadow>
-        <boxGeometry args={[0.11, 0.03, 0.13]} />
-        <meshStandardMaterial color={color} roughness={0.9} />
+        <boxGeometry args={[0.11, 0.034, 0.13]} />
+        <meshStandardMaterial color={color} roughness={0.82} />
+      </mesh>
+      <mesh position={[0, -0.012, 0.02]} scale={[1.02, 0.7, 1]} castShadow>
+        <sphereGeometry args={[0.06, 10, 8]} />
+        <meshStandardMaterial color={color} roughness={0.85} />
       </mesh>
       {/* Wrist */}
-      <mesh position={[0, -0.005, 0.095]} castShadow>
-        <boxGeometry args={[0.085, 0.032, 0.08]} />
+      <mesh position={[0, -0.006, 0.098]} castShadow>
+        <boxGeometry args={[0.086, 0.034, 0.09]} />
         <meshStandardMaterial color={color} roughness={0.9} />
       </mesh>
       {/* Four fingers, splayed slightly */}
@@ -78,8 +90,6 @@ export default function Hands({ visible }) {
     if (!g) return;
 
     visRef.current = THREE.MathUtils.damp(visRef.current, visible ? 1 : 0, 6, delta);
-
-    // Parent group copies the camera transform, so children use camera-space offsets directly
     g.position.copy(camera.position);
     g.quaternion.copy(camera.quaternion);
 
@@ -88,27 +98,21 @@ export default function Hands({ visible }) {
     if (l && r) {
       const scale = visRef.current;
       const sway = Math.sin(state.clock.elapsedTime * 1.6) * 0.004;
-
-      // Local (camera-space) placement: below the book, palms angled up
       l.position.set(leftPos.x, leftPos.y - (1 - scale) * 0.5 + sway, leftPos.z);
       r.position.set(rightPos.x, rightPos.y - (1 - scale) * 0.5 - sway, rightPos.z);
-
       l.quaternion.copy(baseTilt);
       r.quaternion.copy(baseTilt);
-      l.scale.setScalar(Math.max(0.001, scale));
-      r.scale.setScalar(Math.max(0.001, scale));
+      // small grip motion: fingers close a little further when holding
+      const grip = 1 + (1 - scale) * 0.05;
+      l.scale.setScalar(Math.max(0.001, scale) * grip);
+      r.scale.setScalar(Math.max(0.001, scale) * grip);
     }
   });
 
   return (
     <group ref={group}>
-      {/* Children positions are set in world space each frame */}
-      <group>
-        <Hand side={-1} />
-      </group>
-      <group>
-        <Hand side={1} />
-      </group>
+      <group><Hand side={-1} /></group>
+      <group><Hand side={1} /></group>
     </group>
   );
 }
