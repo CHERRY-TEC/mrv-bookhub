@@ -100,14 +100,9 @@ function PagePlane({ texture, backTexture, geometry, planeRef, flipU = false }) 
     }
     return new THREE.MeshBasicMaterial({ map, toneMapped: false, side: THREE.DoubleSide });
   }, [texture, flipU]);
-  // Reverse side texture (used only while the page is turning)
-  const backMat = useMemo(() => new THREE.MeshBasicMaterial({
-    map: backTexture || texture, toneMapped: false, side: THREE.DoubleSide,
-  }), [backTexture, texture]);
   return (
     <group ref={planeRef}>
       <mesh geometry={geometry} material={mat} frustumCulled={false} />
-      <mesh geometry={geometry} material={backMat} position={[0, 0, -0.001]} frustumCulled={false} visible={false} />
     </group>
   );
 }
@@ -314,13 +309,7 @@ export default function Book({ book, isHeld, onSelect }) {
         // stacked sheets peel with a slight stagger
         underLeaves.current.forEach((leaf, i) => {
           if (!leaf) return;
-          leaf.visible = true;
-          const stagger = Math.min(1, Math.max(0, (p - 0.06 * (i + 1)) / 0.94));
-          const se = easeInOutCubic(stagger);
-          const sm = Math.sin(stagger * Math.PI);
-          leaf.rotation.y = OPEN_ANGLE * se * 0.9 * turnRef.current.dir;
-          leaf.position.z = mid * w * 0.22 - (i + 1) * 0.003;
-          leaf.position.y = sm * h * 0.03;
+          leaf.visible = false;
         });
       }
       bendTurn(curlGeo, mid, p);
@@ -410,23 +399,9 @@ export default function Book({ book, isHeld, onSelect }) {
             <PagePlane texture={leftTex} geometry={pageGeo} flipU />
           </group>
           {/* Thin sheets beneath the turning page — they peel with a stagger */}
-          {[0, 1, 2].map((i) => (
-            <group
-              key={i}
-              ref={(el) => { underLeaves.current[i] = el; }}
-              position={[0, 0, -0.003 * (i + 1)]}
-              visible={false}
-            >
-              <mesh geometry={pageGeo} frustumCulled={false}>
-                <meshBasicMaterial color="#efe4c9" side={THREE.DoubleSide} toneMapped={false} />
-              </mesh>
-            </group>
-          ))}
-          {/* Right page — curls and lifts as it rolls over; its reverse shows
-              the next left page, printed correctly (like a real sheet). */}
+          {/* Right page — curls and lifts as it rolls over */}
           <PagePlane
             texture={rightTex}
-            backTexture={pageTextures[Math.min(5, spread * 2 + 2)] || pagesTex}
             geometry={curlGeo}
             planeRef={rightPlane}
           />
