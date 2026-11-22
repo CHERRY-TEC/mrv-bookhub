@@ -337,7 +337,10 @@ export function makePageTexture(book, index) {
   switch (index) {
     case 0: return makeLeftPageTexture(book);
     case 1: return makeRightPageTexture(book);
-    default: return makeExtraPageTexture(book, index);
+    default:
+      // 2..5 = the original extras, 6..13 = the eight pages that give every
+      // turned leaf its own printed face.
+      return index >= 6 ? makeListPageTexture(book, index) : makeExtraPageTexture(book, index);
   }
 }
 
@@ -451,6 +454,132 @@ export function makeExtraPageTexture(book, index) {
   }
 
   // Running footer with page number
+  ctx.font = `italic 16px ${SERIF}`;
+  ctx.fillStyle = INK_SOFT;
+  ctx.textAlign = 'center';
+  ctx.fillText(`— ${index + 1} —`, W / 2, H - 46);
+  ctx.textAlign = 'left';
+  return finish(c);
+}
+
+/**
+ * Numbered content pages 6..13. Six turns of the hero book expose fourteen
+ * printed faces (cover inside + 6 leaf fronts + 6 leaf backs + page block),
+ * so the catalogue copy needs eight more pages beyond the original six.
+ * Even indices print as left-hand pages (gutter right), odd as right-hand
+ * pages (gutter left).
+ */
+const EXTRA_SPECS = {
+  6: {
+    heading: 'BORROWING POLICY',
+    items: [
+      'Loans run for 14 days and may be extended once.',
+      'An extension needs the owner’s approval before the due date.',
+      'Overdue reminders go out once a day — never duplicated.',
+      'Return the copy in the condition it was handed over.',
+    ],
+  },
+  7: {
+    heading: 'LISTING A COPY',
+    items: [
+      'Open My Listings and choose Sell, Borrow or Both.',
+      'Set a price, or a maximum number of borrow days.',
+      'Photograph the title page so the edition can be verified.',
+      'The listing goes live as soon as it is saved.',
+    ],
+  },
+  8: {
+    heading: 'HANDOVER DESK',
+    items: [
+      'Meet at the library desk, 9am to 5pm on working days.',
+      'Both students show the request code on their phones.',
+      'The desk records the handover against the listing.',
+      'Returns use the same desk and the same code.',
+    ],
+  },
+  9: {
+    heading: 'RESERVATIONS',
+    items: [
+      'Reserve a copy while every listed copy is out.',
+      'You move to the front of the queue automatically.',
+      'The copy is held for three days after it comes back.',
+      'One email tells you it is ready — no duplicates.',
+    ],
+  },
+  10: {
+    heading: 'CONDITION GUIDE',
+    items: [
+      'New — unread, no marks, pages crisp.',
+      'Good — a clean copy with light shelf wear.',
+      'Acceptable — notes and highlighting may be present.',
+      'Condition is recorded at listing, not at return.',
+    ],
+  },
+  11: {
+    heading: 'QUESTIONS ANSWERED',
+    items: [
+      'Borrowing between students is always free.',
+      'Vendors list copies for sale; checkout is simulated.',
+      'Your data stays on the college server — never shared.',
+      'Reminders are sent once a day, never twice.',
+    ],
+  },
+  12: {
+    heading: 'THE MRV SHELVES',
+    lead: 'These shelves hold the display collection — a small, carefully maintained set of titles kept in the library for anyone to browse. Catalogue copies carry live listings; display copies simply show what the collection looks like.',
+    items: [
+      'Scroll along the wall to stroll past the cases.',
+      'Click any copy to lift it into your hands.',
+    ],
+  },
+  13: {
+    heading: 'END OF SAMPLE',
+    lead: 'You have reached the last page of this sample. Put the book back on its shelf, or keep scrolling to turn the pages again — the counter above tracks your place.',
+    quote: '“A book in hand is worth a hundred on a shelf.”',
+  },
+};
+
+export function makeListPageTexture(book, index) {
+  const spec = EXTRA_SPECS[index];
+  const W = 512;
+  const H = 704;
+  const c = makeCanvas(W, H);
+  const ctx = c.getContext('2d');
+  paperBase(ctx, W, H, index % 2 === 0 ? 'right' : 'left');
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+
+  ctx.font = `bold 17px ${SERIF}`;
+  ctx.fillStyle = PAPER_GOLD;
+  drawTrackedLeft(ctx, spec.heading, 54, 96, 2.5);
+  ctx.strokeStyle = 'rgba(168,116,31,0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(54, 116);
+  ctx.lineTo(W - 54, 116);
+  ctx.stroke();
+
+  ctx.font = `21px ${SERIF}`;
+  ctx.fillStyle = INK;
+  let y = 166;
+  if (spec.lead) {
+    y = wrapText(ctx, spec.lead, 54, y, W - 108, 30, 8) + 30;
+  }
+  (spec.items || []).forEach((it) => {
+    ctx.fillStyle = PAPER_GOLD;
+    ctx.fillText('•', 54, y);
+    ctx.fillStyle = INK;
+    y = wrapText(ctx, it, 82, y, W - 136, 28, 3) + 24;
+  });
+  if (spec.quote) {
+    ctx.fillStyle = PAPER_GOLD;
+    ctx.font = `italic 23px ${SERIF}`;
+    y = wrapText(ctx, spec.quote, 54, y + 24, W - 108, 32, 4) + 24;
+    ctx.fillStyle = INK_SOFT;
+    ctx.font = `italic 18px ${SERIF}`;
+    ctx.fillText('— The MRV Library', 54, y);
+  }
+
   ctx.font = `italic 16px ${SERIF}`;
   ctx.fillStyle = INK_SOFT;
   ctx.textAlign = 'center';
