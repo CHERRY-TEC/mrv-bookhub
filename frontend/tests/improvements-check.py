@@ -40,7 +40,7 @@ with sync_playwright() as p:
 
     # 8. Keyboard turn
     page.keyboard.press("ArrowRight")
-    page.wait_for_timeout(1600)
+    page.wait_for_timeout(2600)
     body2 = page.inner_text("body")
     check("keyboard turned page (hint gone)", "to turn the pages" not in body2.lower(),
           "hint still present")

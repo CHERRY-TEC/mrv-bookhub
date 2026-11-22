@@ -87,69 +87,27 @@ function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-/* ---- a page plane with a soft gutter shadow ------------------------ */
-function makeShadowMaterial() {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 8;
-  const ctx = c.getContext('2d');
-  const grad = ctx.createLinearGradient(0, 0, 256, 0);
-  grad.addColorStop(0, 'rgba(40,25,10,0.32)');
-  grad.addColorStop(0.25, 'rgba(40,25,10,0.12)');
-  grad.addColorStop(0.6, 'rgba(40,25,10,0.0)');
-  grad.addColorStop(1, 'rgba(40,25,10,0)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 256, 8);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return new THREE.MeshBasicMaterial({
-    map: tex, transparent: true, opacity: 0, toneMapped: false,
-    side: THREE.DoubleSide, depthWrite: false,
-  });
-}
-
-function PagePlane({ texture, backTexture, geometry, shadowGeometry, planeRef }) {
+/* ---- a page plane --------------------------------------------------- */
+function PagePlane({ texture, backTexture, geometry, planeRef, flipU = false }) {
   const mat = useMemo(() => {
-    if (!backTexture) {
-      return new THREE.MeshBasicMaterial({
-        map: texture, toneMapped: false, side: THREE.DoubleSide,
-      });
+    let map = texture;
+    if (flipU && texture) {
+      map = texture.clone();
+      map.wrapS = THREE.RepeatWrapping;
+      map.repeat.x = -1;
+      map.offset.x = 1;
+      map.needsUpdate = true;
     }
-    // Show a different, correctly-oriented printed page on each side.
-    return new THREE.ShaderMaterial({
-      side: THREE.DoubleSide,
-      uniforms: {
-        frontMap: { value: texture },
-        backMap: { value: backTexture },
-      },
-      vertexShader: `
-        varying vec2 vUv;
-        void main() {
-          vUv = uv;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        uniform sampler2D frontMap;
-        uniform sampler2D backMap;
-        varying vec2 vUv;
-        void main() {
-          // At rest we look at the front of the sheet. As the page rotates
-          // past the reader, the reverse becomes visible and carries the
-          // incoming page — mirrored back so it reads correctly.
-          vec4 c = gl_FrontFacing
-            ? texture2D(frontMap, vUv)
-            : texture2D(backMap, vec2(1.0 - vUv.x, vUv.y));
-          gl_FragColor = c;
-        }
-      `,
-    });
-  }, [texture, backTexture]);
-  const shadowMat = useMemo(() => makeShadowMaterial(), []);
-  useEffect(() => () => { shadowMat.map?.dispose(); shadowMat.dispose(); }, [shadowMat]);
+    return new THREE.MeshBasicMaterial({ map, toneMapped: false, side: THREE.DoubleSide });
+  }, [texture, flipU]);
+  // Reverse side texture (used only while the page is turning)
+  const backMat = useMemo(() => new THREE.MeshBasicMaterial({
+    map: backTexture || texture, toneMapped: false, side: THREE.DoubleSide,
+  }), [backTexture, texture]);
   return (
     <group ref={planeRef}>
       <mesh geometry={geometry} material={mat} frustumCulled={false} />
-      <mesh geometry={shadowGeometry} material={shadowMat} position={[0, 0, 0.002]} frustumCulled={false} />
+      <mesh geometry={geometry} material={backMat} position={[0, 0, -0.001]} frustumCulled={false} visible={false} />
     </group>
   );
 }
@@ -350,18 +308,10 @@ export default function Book({ book, isHeld, onSelect }) {
         rightPlane.current.rotation.y = OPEN_ANGLE * e * 0.9 * turnRef.current.dir;
         rightPlane.current.position.z = mid * w * 0.25;
         rightPlane.current.position.y = mid * h * 0.04;
-        const shadow = rightPlane.current.children[1]?.material;
-        if (shadow) shadow.opacity = mid * 0.85;
-        // Hide readable print mid-turn — a real page is a blur of paper then;
-        // this also avoids showing mirrored text on the sheet's reverse.
-        const sheet = rightPlane.current.children[0]?.material;
-        if (sheet?.uniforms) {
-          sheet.uniforms.frontMap.value = mid > 0.25 ? pagesTex : rightTex;
-          sheet.uniforms.backMap.value = mid > 0.25 ? pagesTex : (pageTextures[Math.min(5, spread * 2 + 2)] || pagesTex);
-        }
         // stacked sheets peel with a slight stagger
         underLeaves.current.forEach((leaf, i) => {
           if (!leaf) return;
+          leaf.visible = true;
           const stagger = Math.min(1, Math.max(0, (p - 0.06 * (i + 1)) / 0.94));
           const se = easeInOutCubic(stagger);
           const sm = Math.sin(stagger * Math.PI);
@@ -378,16 +328,9 @@ export default function Book({ book, isHeld, onSelect }) {
         if (rightPlane.current) {
           rightPlane.current.rotation.y = 0;
           rightPlane.current.position.set(0, 0, 0);
-          const shadow = rightPlane.current.children[1]?.material;
-          if (shadow) shadow.opacity = 0;
-          const sheet = rightPlane.current.children[0]?.material;
-          if (sheet?.uniforms) {
-            sheet.uniforms.frontMap.value = rightTex;
-            sheet.uniforms.backMap.value = pageTextures[Math.min(5, spread * 2 + 2)] || pagesTex;
-          }
         }
         underLeaves.current.forEach((leaf) => {
-          if (leaf) { leaf.rotation.y = 0; leaf.position.set(0, 0, 0); }
+          if (leaf) { leaf.visible = false; leaf.rotation.y = 0; leaf.position.set(0, 0, 0); }
         });
         bendTurn(curlGeo, 0, 0);
       }
@@ -396,16 +339,9 @@ export default function Book({ book, isHeld, onSelect }) {
       if (rightPlane.current) {
         rightPlane.current.rotation.y = 0;
         rightPlane.current.position.set(0, 0, 0);
-        const shadow = rightPlane.current.children[1]?.material;
-        if (shadow) shadow.opacity = 0;
-        const sheet = rightPlane.current.children[0]?.material;
-        if (sheet?.uniforms) {
-          sheet.uniforms.frontMap.value = rightTex;
-          sheet.uniforms.backMap.value = pageTextures[Math.min(5, spread * 2 + 2)] || pagesTex;
-        }
       }
       underLeaves.current.forEach((leaf) => {
-        if (leaf) { leaf.rotation.y = 0; leaf.position.set(0, 0, 0); }
+        if (leaf) { leaf.visible = false; leaf.rotation.y = 0; leaf.position.set(0, 0, 0); }
       });
     }
     // update which printed spread is visible (commits at the flip midpoint)
@@ -458,7 +394,8 @@ export default function Book({ book, isHeld, onSelect }) {
       {/* While reading, the cloth cover lies flat on the left of the spread */}
       {showSpread && (
         <group position={[-w / 2 + t / 2, 0, d / 2 + 0.006]} rotation={[0, -OPEN_ANGLE, 0]}>
-          <mesh material={coverMat}>
+          {/* inner face is plain cream endpaper; cloth faces away */}
+          <mesh material={mats.inside}>
             <boxGeometry args={[w, h, t]} />
           </mesh>
         </group>
@@ -467,12 +404,9 @@ export default function Book({ book, isHeld, onSelect }) {
       {/* Open spread: static left + right pages, hinged at the spine */}
       {showSpread && (
         <group position={[-w / 2 + t / 2, 0, d / 2 + 0.012]}>
-          {/* Left page lies flat to the left of the spine. Mirror the plane
-              locally so its print reads correctly from the reader's side. */}
+          {/* Left page lies flat to the left of the spine */}
           <group rotation={[0, -OPEN_ANGLE, 0]}>
-            <group scale={[-1, 1, 1]}>
-              <PagePlane texture={leftTex} geometry={pageGeo} shadowGeometry={pageGeo} />
-            </group>
+            <PagePlane texture={leftTex} geometry={pageGeo} flipU />
           </group>
           {/* Thin sheets beneath the turning page — they peel with a stagger */}
           {[0, 1, 2].map((i) => (
@@ -480,6 +414,7 @@ export default function Book({ book, isHeld, onSelect }) {
               key={i}
               ref={(el) => { underLeaves.current[i] = el; }}
               position={[0, 0, -0.003 * (i + 1)]}
+              visible={false}
             >
               <mesh geometry={pageGeo} frustumCulled={false}>
                 <meshBasicMaterial color="#efe4c9" side={THREE.DoubleSide} toneMapped={false} />
@@ -492,7 +427,6 @@ export default function Book({ book, isHeld, onSelect }) {
             texture={rightTex}
             backTexture={pageTextures[Math.min(5, spread * 2 + 2)] || pagesTex}
             geometry={curlGeo}
-            shadowGeometry={pageGeo}
             planeRef={rightPlane}
           />
         </group>
