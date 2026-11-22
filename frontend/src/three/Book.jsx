@@ -70,32 +70,42 @@ function makeTurnGeometry(width, height, segments = 16) {
   return g;
 }
 
-function bendTurn(geo, bend) {
+function bendTurn(geo, bend, sweep = 0) {
   const pos = geo.attributes.position;
   const restX = geo.userData.restX;
   const restZ = geo.userData.restZ;
   const w = geo.userData.width;
   for (let i = 0; i < pos.count; i++) {
     const u = w > 0 ? restX[i * 3] / w : 0; // 0 at spine, 1 at free edge
-    pos.setZ(i, restZ[i] + Math.sin(u * Math.PI) * bend * w * 0.28);
+    // Real page curl: a smooth wave that starts at the free edge and rolls
+    // toward the spine as the turn progresses. `sweep` shifts the wave peak.
+    const wave = Math.sin((u * 0.85 + sweep * 0.35) * Math.PI);
+    // Stronger curl — a real page lifts well off the stack mid-turn
+    const roll = wave * (0.55 + 0.25 * sweep) * bend;
+    pos.setZ(i, restZ[i] + roll * w);
   }
   pos.needsUpdate = true;
 }
 
+/** Smoothstep — slow at the ends, quick through the middle (weighted flip). */
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
 /* ---- a static page plane ------------------------------------------- */
-function PagePlane({ texture, geometry }) {
+function PagePlane({ texture, geometry, planeRef }) {
   const mat = useMemo(
     () => new THREE.MeshBasicMaterial({
       map: texture, toneMapped: false, side: THREE.DoubleSide,
     }),
     [texture]
   );
-  return <mesh geometry={geometry} material={mat} />;
+  return <mesh ref={planeRef} geometry={geometry} material={mat} frustumCulled={false} />;
 }
 
 export default function Book({ book, isHeld, onSelect }) {
   const group = useRef();
-  const turnPivot = useRef();
+  const rightPlane = useRef();
   const { camera } = useThree();
   const [hovered, setHovered] = useState(false);
   const openAmount = useRef(0);
@@ -117,12 +127,12 @@ export default function Book({ book, isHeld, onSelect }) {
     [isHeld, book.title, book.author, book.listing]
   );
 
-  // Two static page planes + one turning leaf, all hinged geometry
+  // Two static page planes + one curlable right page, all hinged geometry
   const pageGeo = useMemo(() => makeTurnGeometry(w * 0.97, h * 0.96, 2), [w, h]);
-  const turnGeo = useMemo(() => makeTurnGeometry(w * 0.97, h * 0.96, 16), [w, h]);
+  const curlGeo = useMemo(() => makeTurnGeometry(w * 0.97, h * 0.96, 20), [w, h]);
   useEffect(() => () => {
-    pageGeo.dispose(); turnGeo.dispose();
-  }, [pageGeo, turnGeo]);
+    pageGeo.dispose(); curlGeo.dispose();
+  }, [pageGeo, curlGeo]);
 
   // Materials for the static/turning surfaces
   const coverMat = useMemo(
@@ -132,12 +142,6 @@ export default function Book({ book, isHeld, onSelect }) {
     }),
     [coverTex, spineTex, book.color]
   );
-  // The turning leaf shows the cover on the first turn, then printed pages
-  const turnTex = bookScroll.target <= 1 ? (coverTex || pagesTex) : (pageTextures[spread * 2] || pagesTex);
-  const paperMat = useMemo(() => new THREE.MeshBasicMaterial({
-    map: turnTex, toneMapped: false, side: THREE.DoubleSide,
-  }), [turnTex]);
-
   /* ---- Book body materials (box order +X,-X,+Y,-Y,+Z,-Z) --------- */
   const mats = useMemo(() => {
     const edge = new THREE.MeshStandardMaterial({ color: book.color, roughness: 0.7 });
@@ -151,9 +155,9 @@ export default function Book({ book, isHeld, onSelect }) {
       coverSet: [edge, edge, edge, edge, coverMat, inside],
       pageSet: [pageSide, pageSide, pageEdge, pageEdge, foreEdge, pageEdge],
       edgeSet: [edge, edge, edge, edge, edge, edge],
-      dispose: [edge, spine, inside, foreEdge, pageSide, pageEdge, coverMat, paperMat],
+      dispose: [edge, spine, inside, foreEdge, pageSide, pageEdge, coverMat],
     };
-  }, [book.color, spineTex, pagesTex, coverMat, paperMat]);
+  }, [book.color, spineTex, pagesTex, coverMat]);
   useEffect(() => () => mats.dispose.forEach((m) => m.dispose()), [mats]);
 
   const shelfPos = useMemo(() => new THREE.Vector3(...book.position), [book.position]);
@@ -171,6 +175,7 @@ export default function Book({ book, isHeld, onSelect }) {
   const holdStart = useRef(0);
   const flyP = useRef(0);
   const OPEN_DELAY = 0.55;
+  const turnRef = useRef({ lastTarget: 0, shownStep: 0, flip: 0, dir: 1, from: 0 });
 
   useEffect(() => {
     document.body.style.cursor = hovered || isHeld ? 'pointer' : 'auto';
@@ -223,17 +228,27 @@ export default function Book({ book, isHeld, onSelect }) {
       scratch.pos.copy(HELD_OFFSET).applyQuaternion(camera.quaternion).add(camera.position);
       scratch.right.set(1, 0, 0).applyQuaternion(camera.quaternion);
       scratch.pos.addScaledVector(scratch.right, openAmount.current * w * 0.5 * g.scale.x);
-      scratch.quat.copy(camera.quaternion).multiply(scratch.tilt);
 
-      flyP.current = THREE.MathUtils.damp(flyP.current, 1, 1.8, delta);
-      g.position.lerp(scratch.pos, blend(0.65));
-      g.quaternion.slerp(scratch.quat, blend(0.65));
-      g.position.y += Math.sin(Math.PI * flyP.current) * 0.05;
-      g.scale.setScalar(THREE.MathUtils.damp(g.scale.x, 1.0, 4, delta));
+      // Smooth, weighty flight with a gentle arc and a tilt that settles
+      flyP.current = THREE.MathUtils.damp(flyP.current, 1, 1.5, delta);
+      g.position.lerp(scratch.pos, blend(0.8));
+      // arc peaks early, then eases down into the reading pose
+      const arc = Math.sin(Math.PI * Math.pow(flyP.current, 0.7));
+      g.position.y += arc * 0.07;
+      const settle = 1 - flyP.current;
+      scratch.tilt.setFromEuler(new THREE.Euler(
+        0.06 + settle * 0.12,
+        0.1 + settle * 0.18,
+        -0.04 + settle * 0.1
+      ));
+      scratch.quat.copy(camera.quaternion).multiply(scratch.tilt);
+      g.quaternion.slerp(scratch.quat, blend(0.8));
+      g.scale.setScalar(THREE.MathUtils.damp(g.scale.x, 1.0, 3, delta));
       g.position.y += Math.sin(state.clock.elapsedTime * 1.6) * 0.006;
     } else {
       prevHeld.current = false;
       if (spreadVisible) setSpreadVisible(false);
+      turnRef.current = { lastTarget: 0, shownStep: 0, flip: 0, dir: 1, from: 0 };
       flyP.current = THREE.MathUtils.damp(flyP.current, 0, 4, delta);
       openAmount.current = THREE.MathUtils.damp(openAmount.current, 0, 7, delta);
       scratch.pos.copy(shelfPos);
@@ -243,22 +258,57 @@ export default function Book({ book, isHeld, onSelect }) {
       g.scale.setScalar(THREE.MathUtils.damp(g.scale.x, hovered ? 1.05 : 1, 10, delta));
     }
 
-    // Ease scroll and derive current spread / turn progress
-    bookScroll.current = THREE.MathUtils.damp(bookScroll.current, bookScroll.target, 1.8, delta);
-    const targetSpread = Math.min(TOTAL_SPREADS - 1, Math.floor(bookScroll.target / 2));
-    if (targetSpread !== spread) setSpread(targetSpread);
-
-    const turnP = bookScroll.current - Math.floor(bookScroll.current / 2) * 2;
-    // Turn progress within the current step (0..1) from fractional part
-    const stepFrac = bookScroll.current - Math.floor(bookScroll.current);
-    const turning = isHeld && openAmount.current > 0.5 && bookScroll.target > 0;
-    const midTurn = turning && stepFrac > 0.02 && stepFrac < 0.98;
-    if (turnPivot.current) {
-      turnPivot.current.visible = midTurn;
-      turnPivot.current.rotation.y = midTurn ? -OPEN_ANGLE * stepFrac : 0;
+    // Turn animation: when the target step changes, run one weighted flip.
+    const target = isHeld ? bookScroll.target : 0;
+    if (target !== turnRef.current.lastTarget) {
+      turnRef.current.lastTarget = target;
+      if (target > turnRef.current.shownStep && turnRef.current.shownStep < 6) {
+        turnRef.current.flip = 1;          // start a forward flip
+        turnRef.current.dir = 1;
+        turnRef.current.from = turnRef.current.shownStep;
+      } else if (target < turnRef.current.shownStep) {
+        turnRef.current.flip = 1;          // start a reverse flip
+        turnRef.current.dir = -1;
+        turnRef.current.from = turnRef.current.shownStep;
+      }
     }
-    if (midTurn) bendTurn(turnGeo, Math.sin(stepFrac * Math.PI));
-    else bendTurn(turnGeo, 0);
+    // advance the current flip (duration ~0.62s), then commit the new page
+    if (turnRef.current.flip > 0) {
+      // Clamp per-frame progress so even low-FPS/software rendering shows
+      // several distinct frames of the roll instead of jumping instantly.
+      turnRef.current.flip = Math.max(0, turnRef.current.flip - Math.min(delta / 0.62, 0.18));
+      const p = 1 - turnRef.current.flip;            // 0..1
+      const e = easeInOutCubic(p);
+      const mid = Math.sin(p * Math.PI);             // 0..1..0
+      // Lift and curl the right-hand page itself so the roll is always
+      // visible — it's the same mesh that carries the printed page.
+      if (rightPlane.current) {
+        rightPlane.current.rotation.y = OPEN_ANGLE * e * 0.9 * turnRef.current.dir;
+        rightPlane.current.position.z = mid * w * 0.25;
+        rightPlane.current.position.y = mid * h * 0.04;
+      }
+      bendTurn(curlGeo, mid, p);
+      if (turnRef.current.flip === 0) {
+        turnRef.current.shownStep = target;
+        if (rightPlane.current) {
+          rightPlane.current.rotation.y = 0;
+          rightPlane.current.position.set(0, 0, 0);
+        }
+        bendTurn(curlGeo, 0, 0);
+      }
+    } else {
+      turnRef.current.shownStep = target;
+      if (rightPlane.current) {
+        rightPlane.current.rotation.y = 0;
+        rightPlane.current.position.set(0, 0, 0);
+      }
+    }
+    // update which printed spread is visible (commits at the flip midpoint)
+    const committed = turnRef.current.flip < 0.5
+      ? turnRef.current.shownStep
+      : (turnRef.current.from + (turnRef.current.dir > 0 ? 0.5 : -0.5));
+    const targetSpread = Math.max(0, Math.min(TOTAL_SPREADS - 1, Math.floor(committed / 2)));
+    if (targetSpread !== spread) setSpread(targetSpread);
   });
 
   const handleClick = (e) => {
@@ -316,20 +366,11 @@ export default function Book({ book, isHeld, onSelect }) {
           <group rotation={[0, -OPEN_ANGLE, 0]}>
             <PagePlane texture={leftTex} geometry={pageGeo} />
           </group>
-          {/* Right page stays on the right */}
-          <PagePlane texture={rightTex} geometry={pageGeo} />
+          {/* Right page — curls and lifts as it rolls over */}
+          <PagePlane texture={rightTex} geometry={curlGeo} planeRef={rightPlane} />
         </group>
       )}
 
-      {/* The turning leaf sweeps right-to-left as you scroll (visibility
-          is driven imperatively in useFrame — React never re-renders here) */}
-      <group
-        ref={turnPivot}
-        position={[-w / 2 + t / 2, 0, d / 2 + 0.022]}
-        visible={false}
-      >
-        <mesh geometry={turnGeo} material={paperMat} />
-      </group>
     </group>
   );
 }

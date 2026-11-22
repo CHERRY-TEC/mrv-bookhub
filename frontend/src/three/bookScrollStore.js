@@ -17,7 +17,7 @@ let accum = 0;
 export function pushScroll(delta) {
   if (!bookScroll.active) return;
   accum += delta;
-  const stride = 140; // px per turn
+  const stride = 110; // px per turn (responsive but deliberate)
   while (accum >= stride) {
     bookScroll.target = Math.min(TOTAL_TURNS, bookScroll.target + 1);
     accum -= stride;
