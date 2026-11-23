@@ -491,11 +491,17 @@ export default function Book({ book, isHeld, onSelect }) {
   const shelfQuat = useMemo(() => {
     // Left wall (Z>0): spine faces -Z (toward the aisle).
     // Right wall (Z<0): spine faces +Z (toward the aisle).
+    // `yaw` is then applied as a world-space Y rotation so the book angles
+    // back toward the reader walking down the aisle (cases are yawed too).
     const y = book.side === 'left' ? -Math.PI / 2 : Math.PI / 2;
-    return book.flat
+    const base = book.flat
       ? new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, y, 0))
       : new THREE.Quaternion().setFromEuler(new THREE.Euler(0, y, 0));
-  }, [book.flat, book.side]);
+    if (book.yaw) {
+      base.premultiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, book.yaw, 0)));
+    }
+    return base;
+  }, [book.flat, book.side, book.yaw]);
 
   return (
     <group ref={group} position={book.position} quaternion={shelfQuat}>

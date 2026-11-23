@@ -22,6 +22,10 @@ const GAP = 0.28;
 const RIGHT_Z = -1.8;            // far wall books face +Z (toward the aisle)
 const LEFT_Z = 1.8;              // near wall books face -Z toward the aisle
 export const FLOOR_WIDTH = CASES_PER_FLOOR * (CASE_WIDTH + GAP) + 3.2;
+/** Cases on both walls are yawed so their spines angle back toward the
+ *  reader walking down the aisle (~29 degrees), like angled display racks. */
+export const SHELF_YAW = 0.5;
+const caseYaw = (side) => (side === 'left' ? SHELF_YAW : -SHELF_YAW);
 
 const CATEGORY_PALETTES = [
   ['#7b2d26', '#1f3a5f', '#37474f', '#283593', '#b71c1c', '#ef6c00'],
@@ -53,15 +57,26 @@ export function buildBookLayout(apiBooks = [], filter = null) {
     const palette = CATEGORY_PALETTES[f];
     for (const side of ['left', 'right']) {
       const wallZ = side === 'left' ? LEFT_Z : RIGHT_Z;
+      const yaw = caseYaw(side);
+      const cosY = Math.cos(yaw);
+      const sinY = Math.sin(yaw);
+      // rotate a point about the case centre (caseX, wallZ) by the shelf yaw
+      const place = (px, pz, cx) => {
+        const dx = px - cx;
+        const dz = pz - wallZ;
+        return [cx + dx * cosY + dz * sinY, wallZ - dx * sinY + dz * cosY];
+      };
       for (let c = 0; c < CASES_PER_FLOOR; c++) {
         const caseX = startX + c * (CASE_WIDTH + GAP);
         for (let s = 0; s < SHELVES_PER_CASE; s++) {
           const shelfY = floorY + 0.5 + s * ((CASE_HEIGHT - 0.6) / SHELVES_PER_CASE);
           let cursorX = caseX - CASE_WIDTH / 2 + 0.22;
-          const count = 8 + Math.floor(rand() * 3);
+          const count = 14 + Math.floor(rand() * 4);
+          const cursorEnd = caseX + CASE_WIDTH / 2 - 0.25;
 
           for (let i = 0; i < count; i++) {
             const thickness = 0.07 + rand() * 0.09;
+            if (cursorX + thickness > cursorEnd) break;
             const h = 0.32 + rand() * 0.14;
             const coverW = 0.24 + rand() * 0.1;
             const lean = rand() < 0.12 ? (rand() - 0.5) * 0.3 : 0;
@@ -72,18 +87,18 @@ export function buildBookLayout(apiBooks = [], filter = null) {
             ) && (!candidate.category || cat.includes(String(candidate.category).toLowerCase())
               || slot % FLOORS.length === f) ? candidate : null;
 
+            const rawX = cursorX + thickness / 2 + (rand() - 0.5) * 0.01;
+            const rawZ = wallZ + (side === 'left' ? 0.28 : -0.28) + (rand() - 0.5) * 0.03;
+            const [px, pz] = place(rawX, rawZ, caseX);
+
             books.push({
               key: `f${f}-${side}-book-${slot}`, slot,
               title: apiBook?.title || DECOR_TITLES[slot % DECOR_TITLES.length],
               author: apiBook?.author || 'MRV Press',
               color: apiBook?.color || palette[Math.floor(rand() * palette.length)],
               size: { w: coverW, h, d: thickness },
-              position: [
-                cursorX + thickness / 2 + (rand() - 0.5) * 0.01,
-                shelfY + h / 2,
-                wallZ + (side === 'left' ? 0.28 : -0.28) + (rand() - 0.5) * 0.03,
-              ],
-              lean, side,
+              position: [px, shelfY + h / 2, pz],
+              lean, side, yaw,
               source: apiBook ? 'api' : 'decorative',
               listing: apiBook?.listing || null,
               bookId: apiBook?.bookId || null,
@@ -98,15 +113,17 @@ export function buildBookLayout(apiBooks = [], filter = null) {
             const h = 0.3 + rand() * 0.08;
             const coverW = 0.22 + rand() * 0.08;
             const apiBook = apiBooks[(slot + f) % Math.max(1, apiBooks.length)];
+            const rawFX = cursorX + coverW / 2;
+            const rawFZ = wallZ + (side === 'left' ? 1 : -1) * (0.28 + h / 2 + 0.02);
+            const [fpx, fpz] = place(rawFX, rawFZ, caseX);
             books.push({
               key: `f${f}-${side}-book-${slot}`, slot,
               title: apiBook?.title || DECOR_TITLES[(slot + 5) % DECOR_TITLES.length],
               author: apiBook?.author || 'MRV Press',
               color: apiBook?.color || palette[Math.floor(rand() * palette.length)],
               size: { w: coverW, h, d: thickness },
-              position: [cursorX + coverW / 2, shelfY + thickness / 2 + 0.01,
-                wallZ + (side === 'left' ? 1 : -1) * (0.28 + h / 2 + 0.02)],
-              lean: 0, flat: true, side,
+              position: [fpx, shelfY + thickness / 2 + 0.01, fpz],
+              lean: 0, flat: true, side, yaw,
               source: apiBook ? 'api' : 'decorative',
               listing: apiBook?.listing || null,
               bookId: apiBook?.bookId || null,
@@ -128,7 +145,7 @@ function Bookcase({ x, y, side, palette }) {
   const back = useMemo(() => new THREE.MeshStandardMaterial({ color: palette, roughness: 0.9 }), [palette]);
 
   return (
-    <group position={[x, y, wallZ]}>
+    <group position={[x, y, wallZ]} rotation={[0, caseYaw(side), 0]}>
       {/* back panel on the outer side of the aisle; the near (left) wall's
           back would only ever be seen from outside the room, so skip it */}
       {side === 'right' && (

@@ -541,6 +541,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+.floor-nav--hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) translateX(-12px);
 }
 .floor-nav button {
   display: flex;

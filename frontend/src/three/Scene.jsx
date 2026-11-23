@@ -58,10 +58,10 @@ function Lights() {
   });
   return (
     <>
-      <ambientLight intensity={0.5} color="#ffe9c9" />
+      <ambientLight intensity={0.85} color="#ffe9c9" />
       <directionalLight
         position={[6, 14, 8]}
-        intensity={1.15}
+        intensity={1.45}
         color="#fff3dd"
         castShadow
         shadow-mapSize-width={2048}
@@ -76,7 +76,7 @@ function Lights() {
       <group ref={follow}>
         {[-6, -2, 2, 6].map((x) => (
           <group key={x}>
-            <pointLight position={[x, 4.1, 1.4]} intensity={9} distance={7} decay={2} color="#ffcf8f" />
+            <pointLight position={[x, 4.1, 1.4]} intensity={16} distance={9} decay={2} color="#ffcf8f" />
             <mesh position={[x, 4.25, 1.4]}>
               <sphereGeometry args={[0.09, 16, 16]} />
               <meshStandardMaterial color="#ffdba8" emissive="#ffc978" emissiveIntensity={2.2} />
@@ -84,8 +84,8 @@ function Lights() {
           </group>
         ))}
       </group>
-      <hemisphereLight args={['#f5e6c8', '#3a2a1c', 0.35]} />
-      <fog attach="fog" args={['#241a12', 12, 30]} />
+      <hemisphereLight args={['#f5e6c8', '#3a2a1c', 0.55]} />
+      <fog attach="fog" args={['#2b2018', 16, 42]} />
     </>
   );
 }

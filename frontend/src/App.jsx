@@ -233,8 +233,16 @@ function BookPanel({ book, onClose, onAction, user, onLoginPrompt, onAddToBill }
 /* ------------------------------------------------------------------ */
 
 function FloorNav({ floor }) {
+  // Hidden while the hero card is on screen so the two never overlap.
+  const [nearTop, setNearTop] = useState(true);
+  useEffect(() => {
+    const onScroll = () => setNearTop(window.scrollY < window.innerHeight * 0.6);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
   return (
-    <div className="floor-nav" aria-label="Library floors">
+    <div className={`floor-nav${nearTop ? ' floor-nav--hidden' : ''}`} aria-label="Library floors">
       {FLOORS.map((f) => (
         <button key={f.id} className={floor === f.id ? 'active' : ''}
           onClick={() => goToFloor(f.id)} title={`${f.name} — ${f.category}`}>
