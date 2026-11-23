@@ -247,8 +247,15 @@ function Book({ book, isHeld, onSelect }) {
     pivot.position.set(-HW / 2, 0, HT / 2 + slim / 2);
     H.group.add(pivot);
     H.pivot = pivot;
-    add(HW, HH, slim, HW / 2, 0, 0,
+    // The inside of the front cover shows printed page 0 while reading.
+    // During fly-in/out a right-wall book can face its -Z side toward the
+    // reader; we swap in the printed jacket for those phases so you never
+    // see a bare page where the cover should be.
+    const coverMesh = add(HW, HH, slim, HW / 2, 0, 0,
       [bc, bc, bc, bc, coverMat, insideMat], pivot);
+    H.coverMesh = coverMesh;
+    H.coverInsideMat = insideMat;
+    H.coverOutsideMat = coverMat;
 
     // bendable, two-sided leaves
     const LW = HW - 0.012, LH = HH - 0.02;
@@ -406,6 +413,9 @@ function Book({ book, isHeld, onSelect }) {
       // so the book arrives already turned toward the reader (no snap at 1)
       H.group.quaternion.copy(startQuat.current).slerp(heldQuat(camera), e);
       H.group.scale.setScalar(THREE.MathUtils.lerp(fromScale.current, heldScale, e));
+      // Flight: show the printed jacket on both broad faces so the reader
+      // never sees a bare page where a closed book's cover should be.
+      H.coverMesh.material[5] = H.coverOutsideMat;
       if (phaseT.current >= 1) {
         phase.current = 'coverOpen';
         phaseT.current = 0;
@@ -417,6 +427,8 @@ function Book({ book, isHeld, onSelect }) {
     if (phase.current === 'coverOpen' && H) {
       phaseT.current = Math.min(1, phaseT.current + dt / phaseDur.current);
       H.pivot.rotation.y = OPEN_ANGLE * ease(phaseT.current);
+      // once the cover is partway open, reveal the printed first page inside
+      if (phaseT.current > 0.35) H.coverMesh.material[5] = H.coverInsideMat;
       const target = scratchTarget(camera, H, w);
       H.group.position.lerp(target, Math.min(1, dt * 8));
       H.group.quaternion.slerp(heldQuat(camera), Math.min(1, dt * 6));
@@ -499,6 +511,8 @@ function Book({ book, isHeld, onSelect }) {
     if (phase.current === 'coverClose' && H) {
       phaseT.current = Math.min(1, phaseT.current + dt / phaseDur.current);
       H.pivot.rotation.y = OPEN_ANGLE * (1 - ease(phaseT.current));
+      // as the cover shuts, flip its inside face back to the printed jacket
+      if (phaseT.current > 0.65) H.coverMesh.material[5] = H.coverOutsideMat;
       if (phaseT.current >= 1) {
         phase.current = 'flyOut';
         phaseT.current = 0;
@@ -519,6 +533,7 @@ function Book({ book, isHeld, onSelect }) {
       // settle back into the exact orientation the shelf copy was hidden at
       H.group.quaternion.copy(fromQuat.current).slerp(startQuat.current, e);
       H.group.scale.setScalar(THREE.MathUtils.lerp(fromScale.current, startScale.current, e));
+      H.coverMesh.material[5] = H.coverOutsideMat;
       if (phaseT.current >= 1) {
         scene.remove(H.group);
         disposeHero();
