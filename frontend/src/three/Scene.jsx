@@ -64,8 +64,8 @@ function Lights() {
         intensity={1.45}
         color="#fff3dd"
         castShadow
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
+        shadow-mapSize-width={1024}
+        shadow-mapSize-height={1024}
         shadow-camera-left={-16}
         shadow-camera-right={16}
         shadow-camera-top={20}
@@ -107,7 +107,7 @@ export default function Scene({ apiBooks, onSelectBook, heldKey }) {
   return (
     <Canvas
       shadows
-      dpr={[1, 1.8]}
+      dpr={[1, 1.5]}
       gl={{ antialias: true, powerPreference: 'high-performance' }}
       camera={{ fov: 70, near: 0.1, far: 80, position: [0, 1.7, 0.5] }}
       onCreated={({ gl }) => {

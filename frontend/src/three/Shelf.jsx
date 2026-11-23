@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import Book from './Book';
 import { makeFloorTexture, mulberry32 } from './textures';
-import { FLOORS, FLOOR_HEIGHT, setBillerOpen, goToFloor } from './libraryStore';
+import { FLOORS, FLOOR_HEIGHT, setBillerOpen, goToFloor, libraryStore } from './libraryStore';
 import { cartStore, subscribeCart } from './cartStore';
 
 /**
@@ -297,10 +297,30 @@ function FloorPlate({ y }) {
 
 export default function Shelf({ books, heldKey, onSelectBook }) {
   const startX = -((CASES_PER_FLOOR - 1) * (CASE_WIDTH + GAP)) / 2 - 0.8;
+  const structureRefs = useRef([]);
+  const bookGroupRefs = useRef([]);
+  const byFloor = useMemo(() => FLOORS.map((_, i) => books.filter((b) => b.floor === i)), [books]);
+
+  // Only the floor you are on is drawn (both floors stay visible while the
+  // camera rides the stairs between them). Rendering all three floors meant
+  // ~3000 books and their cases every frame — the main cause of the stutter.
+  useFrame(() => {
+    const active = libraryStore.floor;
+    const moving = libraryStore.transition < 1;
+    const refs = structureRefs.current;
+    for (let i = 0; i < refs.length; i++) {
+      if (refs[i]) refs[i].visible = i === active || moving;
+    }
+    const bRefs = bookGroupRefs.current;
+    for (let i = 0; i < bRefs.length; i++) {
+      if (bRefs[i]) bRefs[i].visible = i === active || moving;
+    }
+  });
+
   return (
     <group>
-      {FLOORS.map((f) => (
-        <group key={f.id}>
+      {FLOORS.map((f, fi) => (
+        <group key={f.id} ref={(el) => { structureRefs.current[fi] = el; }}>
           <FloorPlate y={f.y} />
           <BillerDesk floor={f.id} />
           <CartTable floor={f.id} />
@@ -313,8 +333,12 @@ export default function Shelf({ books, heldKey, onSelectBook }) {
           )}
         </group>
       ))}
-      {books.map((b) => (
-        <Book key={b.key} book={b} isHeld={heldKey === b.key} onSelect={onSelectBook} />
+      {byFloor.map((floorBooks, fi) => (
+        <group key={`floor-books-${FLOORS[fi].id}`} ref={(el) => { bookGroupRefs.current[fi] = el; }}>
+          {floorBooks.map((b) => (
+            <Book key={b.key} book={b} isHeld={heldKey === b.key} onSelect={onSelectBook} />
+          ))}
+        </group>
       ))}
     </group>
   );

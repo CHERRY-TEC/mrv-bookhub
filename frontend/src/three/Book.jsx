@@ -1,4 +1,4 @@
-import { useRef, useMemo, useEffect, useState } from 'react';
+import { useRef, useMemo, useEffect, useState, memo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import {
@@ -20,7 +20,6 @@ import { playPageFlip } from './pageSound';
  */
 
 const HELD_OFFSET = new THREE.Vector3(-0.05, 0.02, -0.8);
-const HELD_TILT = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.06, 0.08, -0.03));
 const OPEN_ANGLE = -2.5;          // reference cover swing
 const PAGE_FIN = 2.38;            // reference flat-on-left angle
 const LEAF_COUNT = 6;             // 6 bendable leaves -> 6 turns
@@ -28,7 +27,38 @@ const SEGMENTS = 20;              // page bend resolution
 
 /* ---- tween helpers (frame-driven) ---------------------------------- */
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+// smootherstep: zero velocity *and* zero acceleration at both ends, so the
+// flight eases in and out without the small kick a plain cubic leaves behind.
+const flyEase = (t) => t * t * t * (t * (t * 6 - 15) + 10);
 const sineEase = (t) => 0.5 - 0.5 * Math.cos(Math.PI * t);
+
+/* ---- camera-relative held pose ------------------------------------- */
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const _fwd = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _qTilt = new THREE.Quaternion();
+const _qRoll = new THREE.Quaternion();
+const _qHeld = new THREE.Quaternion();
+
+/**
+ * Where the held book should point. The aisle camera walks looking down +X,
+ * so a fixed world yaw of ~0 leaves the pages edge-on to the reader (that was
+ * the "book is not facing me" bug). Derive the yaw from the camera every
+ * frame instead, with a slight lean back and a whisper of roll.
+ */
+function heldQuat(camera) {
+  _fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  _qHeld.setFromAxisAngle(WORLD_UP, Math.atan2(-_fwd.x, -_fwd.z));
+  _right.crossVectors(_fwd, WORLD_UP);            // screen-right axis
+  if (_right.lengthSq() > 1e-6) {
+    _right.normalize();
+    _qTilt.setFromAxisAngle(_right, 0.05);        // top leans toward the reader
+    _qHeld.premultiply(_qTilt);
+  }
+  _qRoll.setFromAxisAngle(_fwd, -0.02);
+  _qHeld.premultiply(_qRoll);
+  return _qHeld;
+}
 
 /* ---- texture caches ------------------------------------------------ */
 const spineCache = new Map();
@@ -106,7 +136,7 @@ function makePageChain(width, height, segments) {
   return geo;
 }
 
-export default function Book({ book, isHeld, onSelect }) {
+function Book({ book, isHeld, onSelect }) {
   const group = useRef();
   const coverPivot = useRef();
   const shelfRef = useRef();          // shelf model (hidden while held)
@@ -151,9 +181,10 @@ export default function Book({ book, isHeld, onSelect }) {
     const pageEdge = new THREE.MeshStandardMaterial({ color: '#efe6cf', roughness: 0.95 });
     return {
       edge, spine, coverFront, inside,
-      coverSet: [edge, edge, edge, edge, coverFront, inside],
-      pageSet: [pageSide, pageSide, pageEdge, pageEdge, inside, pageEdge],
-      edgeSet: [edge, edge, edge, edge, edge, edge],
+      // One box per shelf book (fore-edge, spine, top, bottom, cover, back)
+      // instead of the old four separate meshes: ~3000 books x4 was most of
+      // the scene's draw calls, and that is what made scrolling stutter.
+      bookSet: [pageSide, spine, pageEdge, pageEdge, coverFront, edge],
       all: [edge, spine, coverFront, inside, pageSide, pageEdge],
     };
   }, [book.color, spineTex, coverTex, pagesTex]);
@@ -265,8 +296,10 @@ export default function Book({ book, isHeld, onSelect }) {
   const phaseT = useRef(0);          // 0..1 progress within phase
   const phaseDur = useRef(1);
   const startPos = useRef(new THREE.Vector3());
+  const startQuat = useRef(new THREE.Quaternion());
   const startScale = useRef(1);
   const fromPos = useRef(new THREE.Vector3());
+  const fromQuat = useRef(new THREE.Quaternion());
   const fromScale = useRef(1);
   const turn = useRef({ active: false, t: 0, dur: 1, k: 0, dir: 1, from: 0 });
   const closeFlipBack = useRef(false);
@@ -313,17 +346,25 @@ export default function Book({ book, isHeld, onSelect }) {
   useFrame((state, delta) => {
     const g = group.current;
     if (!g) return;
+    const H = hero.current;
+    // Fast path: the ~3000 shelf copies that are not being read have nothing
+    // to animate — one boolean instead of a dozen phase checks each frame.
+    if (!H && !isHeld) return;
     // Wall-clock progress: the reference eases with the real delta so a turn
     // always takes the same time, even in low-FPS/software rendering.
     const dt = Math.min(delta, 0.5);
-    const H = hero.current;
 
     if (isHeld && !H && phase.current === 'idle') {
       // --- begin open: capture shelf position and build the hero copy ---
       camera.updateMatrixWorld(true);
       const shelfPos = new THREE.Vector3(...book.position);
       // world position of the shelf copy, converted to camera space
-      if (shelfRef.current) shelfRef.current.getWorldPosition(startPos.current);
+      if (shelfRef.current) {
+        shelfRef.current.getWorldPosition(startPos.current);
+        // Capture the shelf's real orientation too: the flight starts and
+        // lands exactly where the book sits, so nothing pops on the swap.
+        shelfRef.current.getWorldQuaternion(startQuat.current);
+      }
       startScale.current = 1; // hero is built at the shelf book's real size
       hero.current = buildHero();
       const heroGroup = hero.current.group;
@@ -335,7 +376,7 @@ export default function Book({ book, isHeld, onSelect }) {
       setSpreadVisible(false);
       phase.current = 'flyIn';
       phaseT.current = 0;
-      phaseDur.current = 1.0;
+      phaseDur.current = 1.15;
       fromPos.current.copy(startPos.current);
       fromScale.current = startScale.current;
     }
@@ -351,15 +392,15 @@ export default function Book({ book, isHeld, onSelect }) {
     // ---- phase: fly in (arc + spin + scale) ----
     if (phase.current === 'flyIn' && H) {
       phaseT.current = Math.min(1, phaseT.current + dt / phaseDur.current);
-      const e = ease(phaseT.current);
+      const e = flyEase(phaseT.current);
       // target is camera-relative HELD_OFFSET plus centering nudge
       const target = scratchTarget(camera, H, w);
       H.group.position.lerpVectors(fromPos.current, target, e);
-      H.group.position.y += Math.sin(phaseT.current * Math.PI) * 0.6;
-      H.group.rotation.y = THREE.MathUtils.lerp(Math.PI / 2, 0.08, e);
-      H.group.rotation.x = THREE.MathUtils.lerp(0, 0.05, e);
-      const sc = THREE.MathUtils.lerp(fromScale.current, heldScale, e);
-      H.group.scale.setScalar(sc);
+      H.group.position.y += Math.sin(phaseT.current * Math.PI) * 0.45;
+      // ease out of the shelf's real orientation into a camera-facing hold,
+      // so the book arrives already turned toward the reader (no snap at 1)
+      H.group.quaternion.copy(startQuat.current).slerp(heldQuat(camera), e);
+      H.group.scale.setScalar(THREE.MathUtils.lerp(fromScale.current, heldScale, e));
       if (phaseT.current >= 1) {
         phase.current = 'coverOpen';
         phaseT.current = 0;
@@ -373,7 +414,7 @@ export default function Book({ book, isHeld, onSelect }) {
       H.pivot.rotation.y = OPEN_ANGLE * ease(phaseT.current);
       const target = scratchTarget(camera, H, w);
       H.group.position.lerp(target, Math.min(1, dt * 8));
-      H.group.rotation.set(0.05, 0.08, -0.02);
+      H.group.quaternion.slerp(heldQuat(camera), Math.min(1, dt * 6));
       H.group.scale.setScalar(heldScale);
       if (phaseT.current >= 1) {
         phase.current = 'reading';
@@ -387,7 +428,7 @@ export default function Book({ book, isHeld, onSelect }) {
       const breath = Math.sin(state.clock.elapsedTime * 1.1) * 0.002;
       target.y += breath;
       H.group.position.lerp(target, Math.min(1, dt * 10));
-      H.group.rotation.set(0.05, 0.08, -0.02);
+      H.group.quaternion.slerp(heldQuat(camera), Math.min(1, dt * 6));
       H.group.scale.setScalar(heldScale);
 
       // page turns driven by the shared store
@@ -456,8 +497,9 @@ export default function Book({ book, isHeld, onSelect }) {
       if (phaseT.current >= 1) {
         phase.current = 'flyOut';
         phaseT.current = 0;
-        phaseDur.current = 0.9;
+        phaseDur.current = 1.05;
         fromPos.current.copy(H.group.position);
+        fromQuat.current.copy(H.group.quaternion);
         fromScale.current = H.group.scale.x;
       }
     }
@@ -465,12 +507,12 @@ export default function Book({ book, isHeld, onSelect }) {
     // ---- close: fly back to the shelf with arc + spin ----
     if (phase.current === 'flyOut' && H) {
       phaseT.current = Math.min(1, phaseT.current + dt / phaseDur.current);
-      const e = ease(phaseT.current);
+      const e = flyEase(phaseT.current);
       const target = startPos.current; // shelf world position
       H.group.position.lerpVectors(fromPos.current, target, e);
-      H.group.position.y += Math.sin(phaseT.current * Math.PI) * 0.6;
-      H.group.rotation.y = THREE.MathUtils.lerp(0.08, Math.PI / 2, e);
-      H.group.rotation.x = THREE.MathUtils.lerp(0.05, 0, e);
+      H.group.position.y += Math.sin(phaseT.current * Math.PI) * 0.45;
+      // settle back into the exact orientation the shelf copy was hidden at
+      H.group.quaternion.copy(fromQuat.current).slerp(startQuat.current, e);
       H.group.scale.setScalar(THREE.MathUtils.lerp(fromScale.current, startScale.current, e));
       if (phaseT.current >= 1) {
         scene.remove(H.group);
@@ -512,20 +554,11 @@ export default function Book({ book, isHeld, onSelect }) {
         onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
         onPointerOut={() => setHovered(false)}
       >
-        <mesh position={[0, 0, -(d / 2 - 0.004)]} castShadow receiveShadow material={shelfMats.edgeSet}>
-          <boxGeometry args={[w, h, 0.008]} />
+        {/* Single merged box: no shadow casters either — thousands of
+            shadow-casting books were forcing a second full render pass. */}
+        <mesh material={shelfMats.bookSet}>
+          <boxGeometry args={[w, h, d]} />
         </mesh>
-        <mesh position={[0, 0, 0]} castShadow receiveShadow material={shelfMats.pageSet}>
-          <boxGeometry args={[w * 0.96, h * 0.96, Math.max(0.006, d - 0.016)]} />
-        </mesh>
-        <mesh position={[-w / 2 + 0.004, 0, 0]} castShadow material={shelfMats.spine}>
-          <boxGeometry args={[0.008, h, d]} />
-        </mesh>
-        <group position={[-w / 2 + 0.004, 0, d / 2 - 0.004]}>
-          <mesh material={shelfMats.coverSet} castShadow receiveShadow>
-            <boxGeometry args={[w, h, 0.008]} />
-          </mesh>
-        </group>
       </group>
 
       {/* Hero model mounts here; children added imperatively in the loop */}
@@ -533,6 +566,11 @@ export default function Book({ book, isHeld, onSelect }) {
     </group>
   );
 }
+
+// Clicking one book flips `isHeld` on just two copies; without memo every
+// shelf book re-renders (including its textures/materials useMemo checks).
+// The `book` object identity is stable from buildBookLayout, so this is safe.
+export default memo(Book);
 
 /** Camera-relative reading position for the hero book. */
 function scratchTarget(camera, H, w) {
