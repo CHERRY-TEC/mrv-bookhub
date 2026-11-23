@@ -5,6 +5,7 @@ import Book from './Book';
 import { makeFloorTexture, mulberry32 } from './textures';
 import { FLOORS, FLOOR_HEIGHT, setBillerOpen, goToFloor, libraryStore } from './libraryStore';
 import { cartStore, subscribeCart } from './cartStore';
+import { scrollStore } from './scrollStore';
 
 /**
  * Three-floor library, two facing walls of shelves per floor.
@@ -306,14 +307,16 @@ export default function Shelf({ books, heldKey, onSelectBook }) {
   // ~3000 books and their cases every frame — the main cause of the stutter.
   useFrame(() => {
     const active = libraryStore.floor;
-    const moving = libraryStore.transition < 1;
+    // Show the next floor too while the stairs are being climbed in scroll.
+    const climbing = scrollStore.climbing > 0.02 && scrollStore.floor < FLOORS.length - 1;
+    const moving = libraryStore.transition < 1 || climbing;
     const refs = structureRefs.current;
     for (let i = 0; i < refs.length; i++) {
-      if (refs[i]) refs[i].visible = i === active || moving;
+      if (refs[i]) refs[i].visible = i === active || (moving && i === active + 1);
     }
     const bRefs = bookGroupRefs.current;
     for (let i = 0; i < bRefs.length; i++) {
-      if (bRefs[i]) bRefs[i].visible = i === active || moving;
+      if (bRefs[i]) bRefs[i].visible = i === active || (moving && i === active + 1);
     }
   });
 

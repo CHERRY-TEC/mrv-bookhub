@@ -31,6 +31,32 @@ function finish(c) {
   return tex;
 }
 
+/** One small cloth-and-gold cover texture per colour, shared by all shelf
+ *  books. Avoids generating ~1000 large per-book canvases. */
+const shelfCoverCache = new Map();
+export function getSharedShelfCover(color) {
+  const key = String(color || '#7b2d26');
+  if (shelfCoverCache.has(key)) return shelfCoverCache.get(key);
+  const W = 128, H = 176;
+  const c = makeCanvas(W, H);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = key;
+  ctx.fillRect(0, 0, W, H);
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(255,255,255,0.14)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.22)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(231,205,148,0.85)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(9, 9, W - 18, H - 18);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(14, 14, W - 28, H - 28);
+  const tex = finish(c);
+  shelfCoverCache.set(key, tex);
+  return tex;
+}
+
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);

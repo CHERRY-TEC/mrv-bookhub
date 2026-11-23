@@ -6,6 +6,7 @@ import {
   makeCoverTexture,
   makePagesTexture,
   makePageTexture,
+  getSharedShelfCover,
 } from './textures';
 import { bookScroll, resetScroll, pushScroll, turnBy, setShownStep } from './bookScrollStore';
 import { playPageFlip } from './pageSound';
@@ -73,7 +74,7 @@ function keyFor(book) { return `${book.title}|${book.author}|${book.color}`; }
 function getCachedSpine(book) {
   const key = keyFor(book);
   if (!spineCache.has(key)) {
-    if (spineCache.size > 60) spineCache.delete(spineCache.keys().next().value);
+    if (spineCache.size > 140) spineCache.delete(spineCache.keys().next().value);
     spineCache.set(key, makeSpineTexture(book));
   }
   return spineCache.get(key);
@@ -153,9 +154,11 @@ function Book({ book, isHeld, onSelect }) {
   const heldScale = Math.min(1, 0.27 / w);
 
   const spineTex = useMemo(() => getCachedSpine(book), [book.title, book.color, book.author]);
+  // Held books get their fully printed cover; shelf books share one cloth
+  // cover texture so ~1000 closed books don't each need a 512x704 canvas.
   const coverTex = useMemo(
-    () => (isHeld || hovered ? getCachedCover(book) : null),
-    [isHeld, hovered, book.title, book.color]
+    () => (isHeld ? getCachedCover(book) : getSharedShelfCover(book.color)),
+    [isHeld, book.title, book.color, book.author]
   );
   const pagesTex = getPagesTexture();
   // Slot plan for the 14 printed faces of the open hero book:
@@ -175,16 +178,18 @@ function Book({ book, isHeld, onSelect }) {
     const spine = new THREE.MeshStandardMaterial({ map: spineTex, roughness: 0.68 });
     const coverFront = coverTex
       ? new THREE.MeshStandardMaterial({ map: coverTex, roughness: 0.66 })
-      : edge;
+      : new THREE.MeshStandardMaterial({ color: book.color, roughness: 0.66 });
     const inside = new THREE.MeshStandardMaterial({ color: '#efe7d3', roughness: 0.9 });
     const pageSide = new THREE.MeshStandardMaterial({ map: pagesTex, roughness: 0.95 });
     const pageEdge = new THREE.MeshStandardMaterial({ color: '#efe6cf', roughness: 0.95 });
     return {
       edge, spine, coverFront, inside,
-      // One box per shelf book (fore-edge, spine, top, bottom, cover, back)
-      // instead of the old four separate meshes: ~3000 books x4 was most of
-      // the scene's draw calls, and that is what made scrolling stutter.
-      bookSet: [pageSide, spine, pageEdge, pageEdge, coverFront, edge],
+      // Book box faces are [+X, -X, +Y, -Y, +Z, -Z]. On the shelf each book
+      // is yawed ±90°, so its SPINE (-X) faces the aisle and shows the title;
+      // +X is the page block (paper edges). The broad cover faces (+Z/-Z)
+      // use the printed cover material so a closed book never looks like a
+      // bare slab of paper.
+      bookSet: [pageEdge, spine, pageEdge, pageEdge, coverFront, coverFront],
       all: [edge, spine, coverFront, inside, pageSide, pageEdge],
     };
   }, [book.color, spineTex, coverTex, pagesTex]);

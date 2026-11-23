@@ -535,9 +535,10 @@ export default function App() {
             <p className="eyebrow">MRV College · Digital Library</p>
             <h1>Walk the shelves.<br />Pull a book into your hands.</h1>
             <p className="lede">
-              Scroll to stroll past the library wall — click any book and it flies
-              to your hands and opens. Borrow from classmates, reserve library
-              copies, or order from approved vendors.
+              Scroll to stroll past the shelves — keep scrolling and you'll climb
+              the stairs to the next floor. Click any book and it flies to your
+              hands and opens. Borrow from classmates, reserve library copies,
+              or order from approved vendors.
             </p>
             <div className="hero-cta">
               <button className="btn-primary" onClick={() => setLoginOpen(true)}>
